@@ -277,6 +277,21 @@ void writeTextToFile(const std::string& filename, const std::string& text, bool 
     file << text;
 }
 
+// Write positions delta-encoded with an auxiliary string at the start
+void writePositionsDeltaEncoded(const std::string& filename, const std::vector<Encoder::Position>& positions, bool append, const std::string& auxiliary) {
+    std::ofstream file(filename, append ? std::ios::app : std::ios::trunc);
+    file << auxiliary;
+
+    int prevEnd = 0;
+    for (const auto& pos : positions) {
+        int start = pos.start_target;
+        int end = pos.end_target;
+        file << (start - prevEnd) << " " << (end - start) << " ";
+        prevEnd = end;
+    }
+    file << "\n";
+}
+
 }  // namespace FileUtils
 
 int main() {

@@ -271,6 +271,12 @@ void formatMatchesSimple(const std::vector<Encoder::Position>& positions, const 
     }
 }
 
+// Write arbitrary text to a file, optionally appending
+void writeTextToFile(const std::string& filename, const std::string& text, bool append) {
+    std::ofstream file(filename, append ? std::ios::app : std::ios::trunc);
+    file << text;
+}
+
 }  // namespace FileUtils
 
 int main() {

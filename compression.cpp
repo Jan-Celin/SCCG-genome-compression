@@ -234,6 +234,37 @@ public:
     }
 };
 
+namespace FileUtils {
+
+// Writes mismatches + (start,end) pairs with respect to the target sequence
+void formatMatchesWithTarget(const std::vector<Encoder::Position>& positions, 
+                             const std::string& target, 
+                             const std::string& filename) {
+    std::ostringstream oss;
+    int prevEndTar = -1;
+
+    for (size_t i = 0; i < positions.size(); ++i) {
+        const auto& pos = positions[i];
+        if (prevEndTar >= 0 && pos.start_target > prevEndTar + 1) {
+            oss << target.substr(prevEndTar + 1, pos.start_target - prevEndTar - 1) << "\n";
+        } else if (i == 0 && pos.start_target > 0) {
+            oss << target.substr(0, pos.start_target) << "\n";
+        }
+
+        oss << pos.start_reference << "," << pos.end_reference << "\n";
+        prevEndTar = pos.end_target;
+    }
+
+    if (!positions.empty() && prevEndTar < static_cast<int>(target.size()) - 1) {
+        oss << target.substr(prevEndTar + 1) << "\n";
+    }
+
+    std::ofstream file(filename, std::ios::app);
+    file << oss.str();
+}
+
+}  // namespace FileUtils
+
 int main() {
     cout << "Hello World";
 

@@ -263,6 +263,14 @@ void formatMatchesWithTarget(const std::vector<Encoder::Position>& positions,
     file << oss.str();
 }
 
+// Writes only (start,end) pairs, no target sequence output
+void formatMatchesSimple(const std::vector<Encoder::Position>& positions, const std::string& filename) {
+    std::ofstream file(filename, std::ios::app);
+    for (const auto& pos : positions) {
+        file << pos.start_reference << "," << pos.end_reference << "\n";
+    }
+}
+
 }  // namespace FileUtils
 
 int main() {

@@ -146,71 +146,146 @@ public:
     std::vector<Position> Gmatch(
         const std::string& reference,
         const std::string& target,
-        int kmerLength
+        int kmer_length
     ) {
         constexpr int LIMIT = 100;
         constexpr int MAXSEQ = 1073741824;
 
-        std::vector<int> kmerLocation(MAXSEQ, -1);
-        std::vector<int> nextKmer(reference.size(), -1);
+        std::vector<int> kmer_location(MAXSEQ, -1);
+        std::vector<int> next_kmer(reference.size(), -1);
         std::vector<Position> matches;
+        std::set<int> used_reference_positions; // Track used reference indices
 
-        for (size_t i = 0; i + kmerLength <= reference.size(); ++i) {
-            std::string kmer = reference.substr(i, kmerLength);
-            size_t key = std::hash<std::string>{}(kmer) % MAXSEQ;
-            nextKmer[i] = kmerLocation[key];
-            kmerLocation[key] = static_cast<int>(i);
+        // Build global hash table
+        for (size_t i = 0; i + kmer_length <= reference.size(); ++i) {
+            std::string kmer = reference.substr(i, kmer_length);
+            long long key = std::abs(static_cast<long long>(std::hash<std::string>{}(kmer)));
+            if (key == static_cast<long long>(INT_MIN)) key = 0;
+            while (key > MAXSEQ - 1) key = key / 2;
+            next_kmer[i] = kmer_location[(int)key];
+            kmer_location[(int)key] = static_cast<int>(i);
         }
 
         int index = 0;
-        while (index + kmerLength <= static_cast<int>(target.size())) {
-            std::string kmer = target.substr(index, kmerLength);
-            size_t key = std::hash<std::string>{}(kmer) % MAXSEQ;
+        int lastEIR = 0;
+        while (index + kmer_length <= static_cast<int>(target.size())) {
+            int increment = 0, most_incre = 0;
+            std::string kmer = target.substr(index, kmer_length);
+            long long key = std::abs(static_cast<long long>(std::hash<std::string>{}(kmer)));
+            if (key == static_cast<long long>(INT_MIN)) key = 0;
+            while (key > MAXSEQ - 1) key = key / 2;
 
-            if (kmerLocation[key] == -1) {
-                ++index;
+            if (kmer_location[(int)key] == -1) {
+                index = index + 1;
                 continue;
             }
 
-            int bestStart = INT_MAX;
-            int maxIncrement = 0;
-            int lastEndInRef = matches.empty() ? 0 : matches.back().end_reference;
+            int startIndex = INT_MAX;
+            most_incre = 0;
+            bool match = false;
 
-            for (int pos = kmerLocation[key]; pos != -1; pos = nextKmer[pos]) {
-                if (reference.compare(pos, kmerLength, kmer) != 0) continue;
-                if (std::abs(pos - lastEndInRef) > LIMIT) continue;
+            // Try to find matches in a limit range
+            for (int k = kmer_location[(int)key]; k != -1; k = next_kmer[k]) {
+                increment = 0;
+                std::string Rkmer = reference.substr(k, kmer_length);
+                if (kmer != Rkmer) continue;
 
-                int refIdx = pos + kmerLength;
-                int tarIdx = index + kmerLength;
-                int increment = 0;
+                if (!matches.empty()) {
+                    lastEIR = matches.back().end_reference;
+                } else {
+                    lastEIR = 0;
+                }
+                if (k - lastEIR > LIMIT || k - lastEIR < -LIMIT) continue;
 
-                while (refIdx < (int)reference.size() && tarIdx < (int)target.size() &&
-                    reference[refIdx] == target[tarIdx]) {
-                    ++refIdx; ++tarIdx; ++increment;
+                // Extend match
+                int ref_idx = k + kmer_length;
+                int tar_idx = index + kmer_length;
+                while (ref_idx < (int)reference.size() && tar_idx < (int)target.size() &&
+                       reference[ref_idx] == target[tar_idx]) {
+                    ref_idx++;
+                    tar_idx++;
+                    increment++;
                 }
 
-                if (increment > maxIncrement ||
-                    (increment == maxIncrement && std::abs(pos - lastEndInRef) < std::abs(bestStart - lastEndInRef))) {
-                    bestStart = pos;
-                    maxIncrement = increment;
+                // Check for overlap in reference
+                bool overlaps = false;
+                for (int p = k; p <= k + kmer_length + increment - 1; ++p) {
+                    if (used_reference_positions.count(p)) {
+                        overlaps = true;
+                        break;
+                    }
+                }
+                if (overlaps) continue;
+
+                match = true;
+                if (increment == most_incre) {
+                    if (matches.size() > 1) {
+                        if (k - lastEIR < startIndex - lastEIR)
+                            startIndex = k;
+                    }
+                } else if (increment > most_incre) {
+                    most_incre = increment;
+                    startIndex = k;
                 }
             }
 
-            if (bestStart == INT_MAX) {
-                ++index;
+            // If no match in limit range, search whole sequence
+            if (!match) {
+                for (int k = kmer_location[(int)key]; k != -1; k = next_kmer[k]) {
+                    increment = 0;
+                    std::string Rkmer = reference.substr(k, kmer_length);
+                    if (kmer != Rkmer) continue;
+
+                    int ref_idx = k + kmer_length;
+                    int tar_idx = index + kmer_length;
+                    while (ref_idx < (int)reference.size() && tar_idx < (int)target.size() &&
+                           reference[ref_idx] == target[tar_idx]) {
+                        ref_idx++;
+                        tar_idx++;
+                        increment++;
+                    }
+
+                    // Check for overlap in reference
+                    bool overlaps = false;
+                    for (int p = k; p <= k + kmer_length + increment - 1; ++p) {
+                        if (used_reference_positions.count(p)) {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    if (overlaps) continue;
+
+                    if (increment == most_incre) {
+                        if (matches.size() > 1) {
+                            if (k - lastEIR < startIndex - lastEIR)
+                                startIndex = k;
+                        }
+                    } else if (increment > most_incre) {
+                        most_incre = increment;
+                        startIndex = k;
+                    }
+                }
+            }
+
+            if (startIndex == INT_MAX) {
+                index = index + 1;
                 continue;
             }
 
-            matches.push_back(Position{
-                bestStart,
-                bestStart + kmerLength + maxIncrement - 1,
-                index,
-                index + kmerLength + maxIncrement - 1
-            });
+            Position pos;
+            pos.start_target = index;
+            pos.end_target = index + kmer_length + most_incre - 1;
+            pos.start_reference = startIndex;
+            pos.end_reference = startIndex + kmer_length + most_incre - 1;
+            matches.push_back(pos);
 
-            index += kmerLength + maxIncrement + 1;
+            // Mark used reference positions
+            for (int p = pos.start_reference; p <= pos.end_reference; ++p) {
+                used_reference_positions.insert(p);
+            }
+
+            index = pos.end_target + 1;
         }
-
         return matches;
     }
 };
@@ -345,47 +420,30 @@ int main() {
     using namespace std;
 
     // Example genomes
-    string reference = "ATCGATCGATCG";
-    string target =    "ATCGTTTCGATCG";
+    string reference = "ATCGGATTACGATCGTTAGGCTAGGCTAATCGGCTAGGATCGAAGCTTAGGCTTAGGCTAA";
+    string target =    "TTAGGCTAGGCTAACCGGATCGTTAGGCTAGGCTAACGTTAGGCTAGGATCGTTAAGCTTAG";
 
-    // Create Encoder and find matches with kmer_length = 3, T1 and T2 unused in Lmatch here
+    // Create Encoder and find matches with kmer_length = 5
     Encoder encoder;
-    vector<Encoder::Position> matches = encoder.Lmatch(reference, target, 3, 0, 0);
+    vector<Encoder::Position> matches = encoder.Gmatch(reference, target, 5);
 
-    // In-memory version of formatMatchesWithTarget (returns string)
-    auto formatMatchesWithTargetToString = [&](const vector<Encoder::Position>& positions, const string& target) {
-        ostringstream oss;
-        int prevEndTar = -1;
-        for (size_t i = 0; i < positions.size(); ++i) {
-            const auto& pos = positions[i];
-            if (prevEndTar >= 0 && pos.start_target > prevEndTar + 1) {
-                oss << target.substr(prevEndTar + 1, pos.start_target - prevEndTar - 1) << "\n";
-            } else if (i == 0 && pos.start_target > 0) {
-                oss << target.substr(0, pos.start_target) << "\n";
-            }
-            oss << pos.start_reference << "," << pos.end_reference << "\n";
-            prevEndTar = pos.end_target;
-        }
-        if (!positions.empty() && prevEndTar < static_cast<int>(target.size()) - 1) {
-            oss << target.substr(prevEndTar + 1) << "\n";
-        }
-        return oss.str();
-    };
+    // Format matches with target (including unmatched regions)
+    FileUtils::formatMatchesWithTarget(matches, target, "matches_with_target.txt");
 
-    // In-memory version of formatMatchesSimple (returns string)
-    auto formatMatchesSimpleToString = [&](const vector<Encoder::Position>& positions) {
-        ostringstream oss;
-        for (const auto& pos : positions) {
-            oss << pos.start_reference << "," << pos.end_reference << "\n";
-        }
-        return oss.str();
-    };
+    // Write simple matches (start, end pairs) to a file
+    FileUtils::formatMatchesSimple(matches, "matches_simple.txt");
 
-    cout << "Matches with target (including unmatched target sequences):\n";
-    cout << formatMatchesWithTargetToString(matches, target) << "\n";
+    // Delta encode matches and write to a file
+    FileUtils::writePositionsDeltaEncoded("matches_delta.txt", matches, false, "Delta Encoded Matches:\n");
 
-    cout << "Simple matches (only position pairs):\n";
-    cout << formatMatchesSimpleToString(matches) << "\n";
+    // Postprocess matches (merge consecutive ranges and delta encode)
+    FileUtils::postprocessPositions("matches_simple.txt", "matches_postprocessed.txt");
+
+    // Output results to console
+    cout << "Matches with target written to 'matches_with_target.txt'.\n";
+    cout << "Simple matches written to 'matches_simple.txt'.\n";
+    cout << "Delta encoded matches written to 'matches_delta.txt'.\n";
+    cout << "Postprocessed matches written to 'matches_postprocessed.txt'.\n";
 
     return 0;
 }

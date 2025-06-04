@@ -39,25 +39,34 @@ public:
         const std::string& reference, 
         int kmer_length
     ) {
-        for (int i=0; i < reference.length() - kmer_length + 1; i++) {
+        std::string Nkmer = "";
+        for (int j=0; j<kmer_length; ++j) {
+            Nkmer += 'N';
+        }
+
+        int Nkmer_hash_value = std::hash<std::string>{}(Nkmer);
+
+        for (int i=0; i < reference.length() - kmer_length + 1; ++i) {
             std::string kmer = reference.substr(i, kmer_length);
             int hash_value = std::hash<std::string>{}(kmer);
-            Kmer element;
-            element.kmer = kmer;
-            element.kmerstart = i;
+
+            Kmer new_kmer;
+            new_kmer.kmer = kmer;
+            new_kmer.kmerstart = i;
+
             
             if (kmer_map.find(hash_value) == kmer_map.end()) {
                 kmer_map[hash_value] = std::vector<Kmer>();
-                kmer_map[hash_value].push_back(element);
+                kmer_map[hash_value].push_back(new_kmer);
             }
             else {
-                kmer_map[hash_value].push_back(element);
+                kmer_map[hash_value].push_back(new_kmer);
             }
 
             // TODO-JC: Preskoci n znakove ( provjeriti je li tocno )
-            if (reference[i] == 'N' || reference[i] == 'n') {
-                while (i < reference.length() - kmer_length + 1 && (reference[i] == 'N' || reference[i] == 'n')) {
-                    i++;
+            if (hash_value == Nkmer_hash_value) {
+                while ((reference[i] == 'N' || reference[i] == 'n') && i < reference.length() - kmer_length + 1) {
+                    ++i;
                 }
             }
         }

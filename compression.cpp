@@ -7,6 +7,7 @@
 #include <sstream>
 #include <functional>
 #include <cmath>
+#include <set>
 
 using namespace std;
 
@@ -72,14 +73,14 @@ public:
     ) {
         create_hash_map_L(reference, kmer_length);
         std::vector<Position> pos_list;
+        std::set<int> used_reference_positions;  // Track used reference indices
 
         while (i <= (int)target.length() - kmer_length) {
             std::string kmer = target.substr(i, kmer_length);
             int hash_value = std::hash<std::string>{}(kmer);
 
             if (kmer_map.find(hash_value) == kmer_map.end()) {
-                // No match, move forward
-                i++;
+                ++i;
                 continue;
             }
 
@@ -87,7 +88,6 @@ public:
             int max_increment = -1;
             int best_start_ref = -1;
 
-            // Find the best extension of the kmer match
             for (const auto& new_kmer : kmer_list) {
                 if (new_kmer.kmer != kmer) continue;
 
@@ -103,6 +103,17 @@ public:
                     }
                 }
 
+                // Check if this reference region overlaps any already-used positions
+                bool overlaps = false;
+                for (int p = kmer_start; p <= kmer_start + kmer_length + increment - 1; ++p) {
+                    if (used_reference_positions.count(p)) {
+                        overlaps = true;
+                        break;
+                    }
+                }
+
+                if (overlaps) continue;
+
                 if (increment > max_increment || (increment == max_increment && kmer_start < best_start_ref)) {
                     max_increment = increment;
                     best_start_ref = kmer_start;
@@ -110,8 +121,7 @@ public:
             }
 
             if (best_start_ref == -1) {
-                // No valid match found, move forward
-                i++;
+                ++i;
                 continue;
             }
 
@@ -122,13 +132,16 @@ public:
             pos.end_target = i + kmer_length + max_increment - 1;
             pos_list.push_back(pos);
 
-            // Advance i to the end of the matched region + 1 to avoid overlapping matches
-            i = pos.end_target + 1;
+            // Mark used reference positions
+            for (int p = pos.start_reference; p <= pos.end_reference; ++p) {
+                used_reference_positions.insert(p);
+            }
+
+            i = pos.end_target + 1;  // Advance past the matched region in target
         }
 
         return pos_list;
     }
-
 
     std::vector<Position> Gmatch(
         const std::string& reference,

@@ -62,7 +62,7 @@ public:
         }
     }
 
-    std::vector<Position> Lmatch(
+    std::vector<Encoder::Position> Lmatch(
         const std::string& reference, 
         const std::string& target, 
         int kmer_length, 
@@ -73,94 +73,62 @@ public:
         create_hash_map_L(reference, kmer_length);
         std::vector<Position> pos_list;
 
-        while (true) {
+        while (i <= (int)target.length() - kmer_length) {
             std::string kmer = target.substr(i, kmer_length);
             int hash_value = std::hash<std::string>{}(kmer);
 
             if (kmer_map.find(hash_value) == kmer_map.end()) {
+                // No match, move forward
                 i++;
-                if (i > target.length() - kmer_length) {
-                    break;
-                }
-            } else {
-                int lmax1 = 0;
-                int lmax2 = 0;
-                int pn1 = 0;
-                int pn2 = 0;
-                int ln1 = 0;
-                int ln2 = 0;
+                continue;
+            }
+
+            const std::vector<Kmer>& kmer_list = kmer_map[hash_value];
+            int max_increment = -1;
+            int best_start_ref = -1;
+
+            // Find the best extension of the kmer match
+            for (const auto& new_kmer : kmer_list) {
+                if (new_kmer.kmer != kmer) continue;
+
+                int kmer_start = new_kmer.kmerstart;
+                int end_reference = kmer_start + kmer_length - 1;
+                int end_target = i + kmer_length - 1;
+
+                int max_extend = std::min((int)reference.size() - 1 - end_reference, (int)target.size() - 1 - end_target);
                 int increment = 0;
-                int max_increment = 0;
-                int start_i = 0;
-
-                std::vector<Kmer> kmer_list = kmer_map[hash_value];
-
-                for (Kmer new_kmer : kmer_list) {
-                    int kmer_start = new_kmer.kmerstart;
-                    int end_reference = kmer_start + kmer_length - 1;
-                    int end_target = i + kmer_length - 1;
-                    
-                    // Prosiri duljinu l pocevsi od zajednickog kmera, dok ne naides
-                    // na znak koji nije jednak
-
-                    if (new_kmer.kmer == kmer) {
-                        kmer_start = new_kmer.kmerstart;
-                        end_reference = kmer_start + kmer_length - 1;
-                        end_target = i + kmer_length - 1;
-                                int increment = 0;
-                        int end_i;
-                        if (reference.length() - 1 - end_reference < target.length() - 1 - end_target) {
-                            end_i = reference.length() - end_reference;
-                        } else {
-                            end_i = target.length() - end_target;
-                        }
-
-                        for (int i=1; i<end_i; i++) {
-                            if (reference[end_reference + i] == target[end_target + i]) {
-                                increment++;
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if (kmer_list.size() == 1) {
-                            max_increment = increment;
-                            start_i = kmer_start;
-                        } else {
-                            if (increment > max_increment) {
-                                max_increment = increment;
-                                start_i = kmer_start;
-                            } else if (increment == max_increment) {
-                                if (kmer_start < start_i) {
-                                    start_i = kmer_start;
-                                }
-                            }
-                        }
-                    }
-
-                    if (start_i == INT_MAX) {
-                        i++;
-                        if (i > target.length() - kmer_length) {
-                            break;
-                        }
-                        continue;
-                    }
-
-                    Position pos;
-                    pos.start_reference = start_i;
-                    pos.end_reference = start_i + kmer_length + max_increment - 1;
-                    pos.start_target = i;
-                    pos.end_target = i + kmer_length + max_increment - 1;
-                    pos_list.push_back(pos);
-                    if (i + kmer_length + max_increment - 1 > target.length() - kmer_length) {
+                for (; increment < max_extend; ++increment) {
+                    if (reference[end_reference + 1 + increment] != target[end_target + 1 + increment]) {
                         break;
                     }
                 }
+
+                if (increment > max_increment || (increment == max_increment && kmer_start < best_start_ref)) {
+                    max_increment = increment;
+                    best_start_ref = kmer_start;
+                }
             }
 
-            return pos_list;
+            if (best_start_ref == -1) {
+                // No valid match found, move forward
+                i++;
+                continue;
+            }
+
+            Position pos;
+            pos.start_reference = best_start_ref;
+            pos.end_reference = best_start_ref + kmer_length + max_increment - 1;
+            pos.start_target = i;
+            pos.end_target = i + kmer_length + max_increment - 1;
+            pos_list.push_back(pos);
+
+            // Advance i to the end of the matched region + 1 to avoid overlapping matches
+            i = pos.end_target + 1;
         }
+
+        return pos_list;
     }
+
 
     std::vector<Position> Gmatch(
         const std::string& reference,

@@ -292,6 +292,72 @@ void writePositionsDeltaEncoded(const std::string& filename, const std::vector<E
     file << "\n";
 }
 
+// Postprocess input file by merging consecutive position ranges, then delta encode and write to output file
+void postprocessPositions(const std::string& infile, const std::string& outfile) {
+    std::ifstream inputFile(infile);
+    if (!inputFile.is_open()) {
+        std::cerr << "Error opening input file: " << infile << "\n";
+        return;
+    }
+
+    std::string line;
+    std::stringstream merged;
+    std::vector<int> range;
+
+    // Merge consecutive ranges from the input file
+    while (std::getline(inputFile, line)) {
+        if (line.find(',') != std::string::npos) {
+            auto commaPos = line.find(',');
+            int begin = std::stoi(line.substr(0, commaPos));
+            int end = std::stoi(line.substr(commaPos + 1));
+
+            if (!range.empty() && range.back() != begin - 1) {
+                merged << range.front() << "," << range.back() << "\n";
+                range.clear();
+            }
+            range.push_back(begin);
+            range.push_back(end);
+        } else if (!line.empty()) {
+            if (!range.empty()) {
+                merged << range.front() << "," << range.back() << "\n";
+                range.clear();
+            }
+            merged << line << "\n";
+        }
+    }
+    if (!range.empty()) {
+        merged << range.front() << "," << range.back() << "\n";
+    }
+    inputFile.close();
+
+    // Delta encode merged ranges and write to output file
+    std::istringstream mergedStream(merged.str());
+    std::ostringstream deltaEncoded;
+    int prev = 0;
+    bool firstLine = true;
+
+    while (std::getline(mergedStream, line)) {
+        if (line.find(',') != std::string::npos) {
+            int commaPos = line.find(',');
+            int begin = std::stoi(line.substr(0, commaPos));
+            int end = std::stoi(line.substr(commaPos + 1));
+
+            if (firstLine) {
+                deltaEncoded << begin << "," << (end - begin) << "\n";
+                firstLine = false;
+            } else {
+                deltaEncoded << (begin - prev) << "," << (end - begin) << "\n";
+            }
+            prev = end;
+        } else if (!line.empty()) {
+            deltaEncoded << line << "\n";
+        }
+    }
+
+    std::ofstream outputFile(outfile, std::ios::app);
+    outputFile << deltaEncoded.str();
+}
+
 }  // namespace FileUtils
 
 int main() {

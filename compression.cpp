@@ -1,7 +1,13 @@
 #include <iostream>
-#include <unordered_map>
 #include <vector>
+#include <string>
+#include <unordered_map>
 #include <climits>
+#include <fstream>
+#include <sstream>
+#include <functional>
+#include <cmath>
+
 using namespace std;
 
 
@@ -154,6 +160,77 @@ public:
 
             return pos_list;
         }
+    }
+
+    std::vector<Position> Gmatch(
+        const std::string& reference,
+        const std::string& target,
+        int kmerLength
+    ) {
+        constexpr int LIMIT = 100;
+        constexpr int MAXSEQ = 1073741824;
+
+        std::vector<int> kmerLocation(MAXSEQ, -1);
+        std::vector<int> nextKmer(reference.size(), -1);
+        std::vector<Position> matches;
+
+        for (size_t i = 0; i + kmerLength <= reference.size(); ++i) {
+            std::string kmer = reference.substr(i, kmerLength);
+            size_t key = std::hash<std::string>{}(kmer) % MAXSEQ;
+            nextKmer[i] = kmerLocation[key];
+            kmerLocation[key] = static_cast<int>(i);
+        }
+
+        int index = 0;
+        while (index + kmerLength <= static_cast<int>(target.size())) {
+            std::string kmer = target.substr(index, kmerLength);
+            size_t key = std::hash<std::string>{}(kmer) % MAXSEQ;
+
+            if (kmerLocation[key] == -1) {
+                ++index;
+                continue;
+            }
+
+            int bestStart = INT_MAX;
+            int maxIncrement = 0;
+            int lastEndInRef = matches.empty() ? 0 : matches.back().end_reference;
+
+            for (int pos = kmerLocation[key]; pos != -1; pos = nextKmer[pos]) {
+                if (reference.compare(pos, kmerLength, kmer) != 0) continue;
+                if (std::abs(pos - lastEndInRef) > LIMIT) continue;
+
+                int refIdx = pos + kmerLength;
+                int tarIdx = index + kmerLength;
+                int increment = 0;
+
+                while (refIdx < (int)reference.size() && tarIdx < (int)target.size() &&
+                    reference[refIdx] == target[tarIdx]) {
+                    ++refIdx; ++tarIdx; ++increment;
+                }
+
+                if (increment > maxIncrement ||
+                    (increment == maxIncrement && std::abs(pos - lastEndInRef) < std::abs(bestStart - lastEndInRef))) {
+                    bestStart = pos;
+                    maxIncrement = increment;
+                }
+            }
+
+            if (bestStart == INT_MAX) {
+                ++index;
+                continue;
+            }
+
+            matches.push_back(Position{
+                bestStart,
+                bestStart + kmerLength + maxIncrement - 1,
+                index,
+                index + kmerLength + maxIncrement - 1
+            });
+
+            index += kmerLength + maxIncrement + 1;
+        }
+
+        return matches;
     }
 };
 

@@ -361,7 +361,50 @@ void postprocessPositions(const std::string& infile, const std::string& outfile)
 }  // namespace FileUtils
 
 int main() {
-    cout << "Hello World";
+    using namespace std;
+
+    // Example genomes
+    string reference = "ATCGATCGATCG";
+    string target =    "ATCGTTTCGATCG";
+
+    // Create Encoder and find matches with kmer_length = 3, T1 and T2 unused in Lmatch here
+    Encoder encoder;
+    vector<Encoder::Position> matches = encoder.Lmatch(reference, target, 3, 0, 0);
+
+    // In-memory version of formatMatchesWithTarget (returns string)
+    auto formatMatchesWithTargetToString = [&](const vector<Encoder::Position>& positions, const string& target) {
+        ostringstream oss;
+        int prevEndTar = -1;
+        for (size_t i = 0; i < positions.size(); ++i) {
+            const auto& pos = positions[i];
+            if (prevEndTar >= 0 && pos.start_target > prevEndTar + 1) {
+                oss << target.substr(prevEndTar + 1, pos.start_target - prevEndTar - 1) << "\n";
+            } else if (i == 0 && pos.start_target > 0) {
+                oss << target.substr(0, pos.start_target) << "\n";
+            }
+            oss << pos.start_reference << "," << pos.end_reference << "\n";
+            prevEndTar = pos.end_target;
+        }
+        if (!positions.empty() && prevEndTar < static_cast<int>(target.size()) - 1) {
+            oss << target.substr(prevEndTar + 1) << "\n";
+        }
+        return oss.str();
+    };
+
+    // In-memory version of formatMatchesSimple (returns string)
+    auto formatMatchesSimpleToString = [&](const vector<Encoder::Position>& positions) {
+        ostringstream oss;
+        for (const auto& pos : positions) {
+            oss << pos.start_reference << "," << pos.end_reference << "\n";
+        }
+        return oss.str();
+    };
+
+    cout << "Matches with target (including unmatched target sequences):\n";
+    cout << formatMatchesWithTargetToString(matches, target) << "\n";
+
+    cout << "Simple matches (only position pairs):\n";
+    cout << formatMatchesSimpleToString(matches) << "\n";
 
     return 0;
 }

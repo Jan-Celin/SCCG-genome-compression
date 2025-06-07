@@ -170,9 +170,14 @@ void read_genomes_from_files(const string& reference_file, const string& target_
         exit(1);
     }
 
-    stringstream ref_buffer;
-    ref_buffer << ref_stream.rdbuf();
-    reference_genome = ref_buffer.str();
+    // Obrisi linije koje pocinju s '>' (header linije).
+    string line;
+    while (getline(ref_stream, line)) {
+        if (line.empty() || line[0] == '>') {
+            continue; // Preskoci header linije.
+        }
+        reference_genome += line; // Dodaj liniju u referentni genom.
+    }
     ref_stream.close();
     
     // Obrisi znakove novog reda (i ostale praznine ako postoje).
@@ -184,9 +189,12 @@ void read_genomes_from_files(const string& reference_file, const string& target_
         exit(1);
     }
 
-    stringstream target_buffer;
-    target_buffer << target_stream.rdbuf();
-    target_genome = target_buffer.str();
+    while (getline(target_stream, line)) {
+        if (line.empty() || line[0] == '>') {
+            continue; // Preskoci header linije.
+        }
+        target_genome += line; // Dodaj liniju u target genom.
+    }
     target_stream.close();
 
     // Obrisi znakove novog reda (i ostale praznine ako postoje).
@@ -256,8 +264,8 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
     read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
     
-    string temp_file_path = output_folder + "temp_file.txt";
-    string output_file_path = output_folder + "compressed_genome.txt";
+    string temp_file_path = output_folder + "/temp_file.txt";
+    string output_file_path = output_folder + "/compressed_genome.txt";
 
     // Stvaranje privremene datoteke za spremanje rezultata.
     filesystem::create_directories(output_folder);
@@ -314,11 +322,11 @@ void compress_genome(const string& reference_file, const string& target_file, co
             int total_length = 0;
             for (Position pos : positions) {
                 if (pos.mismatch == "") {
-                    temp_file << " (" << pos.start_reference << ", " << pos.length << ") ";
+                    temp_file << " (" << pos.start_reference << "," << pos.length << ")";
                     total_length += pos.length;
                 }
                 else {
-                    temp_file << " " << pos.mismatch << " ";
+                    temp_file << " " << pos.mismatch;
                     count_mismatches += pos.mismatch.length();
                 }
             }
@@ -338,11 +346,11 @@ void compress_genome(const string& reference_file, const string& target_file, co
             int total_length = 0;
             for (Position pos : positions) {
                 if (pos.mismatch == "") {
-                    temp_file << " (" << pos.start_reference << ", " << pos.length << ") ";
+                    temp_file << " (" << pos.start_reference << "," << pos.length << ")";
                     total_length += pos.length;
                 }
                 else {
-                    temp_file << " " << pos.mismatch << " ";
+                    temp_file << " " << pos.mismatch;
                     count_mismatches += pos.mismatch.length();
                 }
             }
@@ -397,10 +405,13 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
         // Spremi rezultate u temp_file.
         for (Position pos : positions) {
+            cout << " (" << pos.start_reference << ", " << pos.length << ")\n";
+            cout << pos.mismatch;
+            cout << "\n\n";
             if (pos.mismatch == "") {
-                temp_file << " (" << pos.start_reference << ", " << pos.length << ") ";
+                temp_file << " (" << pos.start_reference << ", " << pos.length << ")";
             } else {
-                temp_file << " " << pos.mismatch << " ";
+                temp_file << " " <<  pos.mismatch;
             }
         }
     }
@@ -408,7 +419,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
     temp_file.close();
 
     // Delta kodiranje rezultata.
-    delta_encode(temp_file_path);
+    // delta_encode(temp_file_path);
 
     compress_genome(temp_file_path, output_file_path);
 } 

@@ -266,7 +266,7 @@ void delta_encode(string file_path) {
 
 void compress_genome(const string& input_file, const string& output_file) {
     // Komprimiraj datoteku (PPMd algoritmom od 7-zipa).
-    string command = "7z a -mx=9 " + output_file + ".7z " + output_file;
+    string command = "7z a -mx=9 " + output_file + ".7z " + input_file;
     int result = system(command.c_str());
 
     if (result != 0) {

@@ -78,10 +78,30 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
             index++;  // Increment index by 1.
             continue;
         } else {
-            // Before processing a match, if we've accumulated mismatches, add them to results.
-            if (!currentMismatch.mismatch.empty()) {
-                results.push_back(currentMismatch);
-                currentMismatch.mismatch = "";
+            if (global) {
+                bool candidateInRange = false;
+                // Check if there is at least one candidate p that is in range.
+                for (int p : H[kmer_prime]) {
+                    if (prev_match_end == -1 || abs(p - prev_match_end) <= m) {
+                        candidateInRange = true;
+                        break;
+                    }
+                }
+                if (!candidateInRange) {
+                    index++; // no candidate in range, continue searching
+                    continue;
+                }
+                // Push current mismatches to clear them.
+                if (!currentMismatch.mismatch.empty()) {
+                    results.push_back(currentMismatch);
+                    currentMismatch.mismatch = "";
+                }
+            } else {
+                // For local matching, push mismatches only if there's something accumulated.
+                if (!currentMismatch.mismatch.empty()) {
+                    results.push_back(currentMismatch);
+                    currentMismatch.mismatch = "";
+                }
             }
             
             // 9. Initialize variables for best candidates.

@@ -16,7 +16,6 @@
 using namespace std;
 
 struct Position {
-<<<<<<< HEAD
     int start_reference = -1; // p
     int length = 0;          // l
     string mismatch = "";
@@ -163,13 +162,6 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     return results;
 }
 
-=======
-    string mismatch = "";
-    int start_reference = -1; // p
-    int length = 0;          // l
-};
-
->>>>>>> 470af1bbfeed519cfa4bdf8e8390553a553ed6dc
 void read_genomes_from_files(const string& reference_file, const string& target_file, string& reference_genome, string& target_genome) {
     // Ucitavanje genoma iz datoteka.
     ifstream ref_stream(reference_file);

@@ -424,26 +424,70 @@ void compress_genome(const string& reference_file, const string& target_file, co
         read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
 
         temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
-        // Prebaci sve znakove u velika slova i zapamti indekse malih slova u temp_file
+        // Record contiguous lowercase indices as delta values (for single characters)
+        // or as (delta, length) tuples for runs longer than one.
         temp_file << "lower: ";
-        for (int i = 0; i < target_genome.length(); ++i) {
-            if (islower(target_genome[i])) {
-                temp_file << i << ",";
+        int previous_lower_start = 0;
+        int lower_start = -1;
+        int lower_len = 0;
+        for (int i = 0; i < reference_genome.length(); ++i) {
+            if (islower(reference_genome[i])) {
+                if (lower_len == 0)
+                    lower_start = i; // start new segment
+                ++lower_len;
+            } else {
+                if (lower_len != 0) {
+                    int delta = lower_start - previous_lower_start;
+                    if (lower_len == 1)
+                        temp_file << delta << ",";
+                    else
+                        temp_file << "(" << delta << "," << lower_len << "),";
+                    previous_lower_start = lower_start;
+                    lower_len = 0;
+                }
             }
         }
+        if (lower_len != 0) {
+            int delta = lower_start - previous_lower_start;
+            if (lower_len == 1)
+                temp_file << delta;
+            else
+                temp_file << "(" << delta << "," << lower_len << ")";
+        }
         temp_file << "\n";
-        transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
-        transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
-
-        // Obrisi sve N znakove u target_genome, zapamti njihove indekse u temp_file.
+                
+        // Record contiguous 'N' characters as delta values (for single characters)
+        // or as (delta, length) tuples for runs longer than one.
         temp_file << "N: ";
-        for (size_t i = 0; i < target_genome.length(); ++i) {
+        int previous_n_start = 0;
+        int n_start = -1;
+        int n_len = 0;
+        for (int i = 0; i < target_genome.length(); ++i) {
             if (target_genome[i] == 'N') {
-                temp_file << i << ",";
+                if (n_start == -1)
+                    n_start = i; // start new segment
+                ++n_len;
+            } else {
+                if (n_len != 0) {
+                    int delta = n_start - previous_n_start;
+                    if (n_len == 1)
+                        temp_file << delta << ",";
+                    else
+                        temp_file << "(" << delta << "," << n_len << "),";
+                    previous_n_start = n_start;
+                    n_start = -1;
+                    n_len = 0;
+                }
             }
         }
+        if (n_len != 0) {
+            int delta = n_start - previous_n_start;
+            if (n_len == 1)
+                temp_file << delta;
+            else
+                temp_file << "(" << delta << "," << n_len << ")";
+        }
         temp_file << "\n";
-        target_genome.erase(remove(target_genome.begin(), target_genome.end(), 'N'), target_genome.end());
 
         // Globalno poravnanje (s duljinom k-mera k).
         vector<Position> positions = match_sequences(reference_genome, target_genome, k, m, true);

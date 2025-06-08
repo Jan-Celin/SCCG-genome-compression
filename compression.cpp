@@ -12,6 +12,7 @@
 #include <climits>
 #include <filesystem>
 #include <unordered_map>
+#include <string_view>
 
 using namespace std;
 
@@ -32,11 +33,13 @@ struct Position {
 // This function extends the alignment from position p in Sr and index in St,
 // checking for matches until a mismatch is found or the end of either sequence is reached.
 int extend_alignment(const string& Sr, const string& St, int p, int index, int k) {
+    //cout << "DEBUG: extend_alignment() called with p=" << p << ", index=" << index << "\n";
     int l = k; // starting with k characters that are known to match
-    while (p + l < (int)Sr.size() && index + l < (int)St.size() &&
-           Sr[p + l] == St[index + l]) {
+    while (p + l + 1 < (int)Sr.size() && index + l + 1 < (int)St.size() &&
+           Sr[p + l + 1] == St[index + l + 1]) {
         l++;
     }
+    //cout << "DEBUG: extend_alignment() returning l=" << l << "\n";
     return l;
 }
 
@@ -48,14 +51,17 @@ int extend_alignment(const string& Sr, const string& St, int p, int index, int k
 //    m: Limit of search range (for global matching distance)
 //    global: Boolean flag, if true enables global matching.
 vector<Position> match_sequences(const string& Sr, const string& St, int k, int m, bool global) {
+    // cout << "DEBUG: match_sequences() started. global=" << global << ", k=" << k << ", m=" << m << "\n";
     // 1. Get length L of target St.
     int L = St.size();
     
     // 2. Build hash table H from all k-mers in Sr.
     //    This maps each k-mer to a vector of its starting positions in Sr.
-    unordered_map<string, vector<int>> H;
+    // Using string_view to avoid extra allocations from substr.
+    unordered_map<string_view, vector<int>> H;
     for (int i = 0; i <= (int)Sr.size() - k; i++) {
-        string kmer = Sr.substr(i, k);
+        // Creating a string_view from Sr starting at i with length k.
+        string_view kmer(&Sr[i], k);
         H[kmer].push_back(i);
     }
     
@@ -64,17 +70,30 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     int index = 0;
     int prev_match_end = -1;
     vector<Position> results;
-    Position currentMismatch;   // Will accumulate mismatched characters; start_reference remains -1
+    Position currentMismatch;   // Accumulate mismatches.
     
-    // 4. Main loop: while index < L - k + 1.
+    // For progress indicator if global alignment is enabled.
+    int lastPrintedProgress = 0;
+    
+    // 4. Main loop: while index < L - k + 1. Doing until L to record mismatches at the end of St.
     while (index < L - k + 1) {
+        // If global, print progress every 2%
+        if (global) {
+            int progress = (index * 100) / L;
+            if (progress >= lastPrintedProgress + 2) {
+                cout << "Progress: " << progress << "%\n";
+                lastPrintedProgress = progress;
+            }
+        }
+        
         // 4.1 Extract the k-mer starting at index in St.
-        string kmer_prime = St.substr(index, k);
+        // Using string_view to avoid copying via substr.
+        string_view kmer_prime(&St[index], k);
         
         // 4.2 If no match for kmer_prime is found in H:
         if (H.find(kmer_prime) == H.end()) {
             // Accumulate the mismatched character.
-            currentMismatch.mismatch += St.substr(index, 1);
+            currentMismatch.mismatch.push_back(St[index]);
             index++;  // Increment index by 1.
             continue;
         } else {
@@ -88,6 +107,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
                     }
                 }
                 if (!candidateInRange) {
+                    currentMismatch.mismatch.push_back(St[index]);
                     index++; // no candidate in range, continue searching
                     continue;
                 }
@@ -169,21 +189,27 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
             results.push_back(matchRes);
             
             // 33. Update index.
-            index = index + final_l + 1;
+            // cout << "DEBUG " << index << ": match found at reference " << final_p << " with length " << final_l << "\n";
+            index = index + final_l;
         }
     }
     
     // After the loop, if any mismatches remain, add them as a final entry.
+    if (index < L) {
+        currentMismatch.mismatch.append(St.substr(index)); // Append all remaining characters after index.
+    }
     if (!currentMismatch.mismatch.empty()) {
         results.push_back(currentMismatch);
     }
     
     // 35. Return the results.
+    cout << "DEBUG: match_sequences() finished with " << results.size() << " results.\n";
     return results;
 }
 
 void read_genomes_from_files(const string& reference_file, const string& target_file, string& reference_genome, string& target_genome) {
     // Ucitavanje genoma iz datoteka.
+    cout << "DEBUG: read_genomes_from_files() started.\n";
     ifstream ref_stream(reference_file);
     if (!ref_stream.is_open()) {
         cerr << "Error opening reference file: " << reference_file << "\n";
@@ -219,6 +245,7 @@ void read_genomes_from_files(const string& reference_file, const string& target_
 
     // Obrisi znakove novog reda (i ostale praznine ako postoje).
     target_genome.erase(remove_if(target_genome.begin(), target_genome.end(), ::isspace), target_genome.end());
+    cout << "DEBUG: Completed reading genomes.\n";
 }
 
 void delta_encode(string file_path) {
@@ -262,9 +289,11 @@ void delta_encode(string file_path) {
     }
     out_file << temp_file;
     out_file.close();
+    cout << "DEBUG: delta_encode() finished.\n";
 }
 
 void compress_genome(const string& input_file, const string& output_file) {
+    cout << "DEBUG: compress_genome() using 7z started.\n";
     // Komprimiraj datoteku (PPMd algoritmom od 7-zipa).
     string command = "7z a -mx=9 " + output_file + ".7z " + input_file;
     int result = system(command.c_str());
@@ -275,9 +304,11 @@ void compress_genome(const string& input_file, const string& output_file) {
     } else {
         cout << "Datoteka uspjesno komprimirana: " << output_file << ".7z !\n";
     }
+    cout << "DEBUG: compress_genome() using 7z finished.\n";
 }
 
 void compress_genome(const string& reference_file, const string& target_file, const string& output_folder) {
+    cout << "DEBUG: compress_genome() (reference/target) started.\n";
     // Algoritam 2 iz rada.
     string reference_genome;
     string target_genome;
@@ -288,10 +319,12 @@ void compress_genome(const string& reference_file, const string& target_file, co
     string output_file_path = output_folder + "/compressed_genome.txt";
 
     // Stvaranje privremene datoteke za spremanje rezultata.
+    cout << "DEBUG: Creating output folder if necessary.\n";
     filesystem::create_directories(output_folder);
     ofstream temp_file(temp_file_path, ofstream::out | ofstream::trunc);
 
     // Prebaci sve znakove u velika slova i zapamti indekse malih slova u temp_file
+    cout << "DEBUG: Writing lowercase indices from reference_genome.\n";
     for (int i = 0; i < reference_genome.length(); ++i) {
         if (islower(reference_genome[i])) {
             temp_file << i << ",";
@@ -321,16 +354,11 @@ void compress_genome(const string& reference_file, const string& target_file, co
         target_segments.push_back(target_genome.substr(i, L));
     }
 
-    // Prodi kroz sve parove segmenata reference i targeta.
-    int num_iterations = 0;
-    if (reference_segments.size() < target_segments.size()) {
-        num_iterations = reference_segments.size();
-    } else {
-        num_iterations = target_segments.size();
-    }
-
+    int num_iterations = min(reference_segments.size(), target_segments.size());
+    cout << "DEBUG: Starting segment comparisons for " << num_iterations << " iterations.\n";
     int mismatch = 0;
     for (int i = 0; i < num_iterations; ++i) {
+        cout << "DEBUG: Processing segment " << i << "\n";
         string r_i = reference_segments[i];
         string t_i = target_segments[i];
 
@@ -352,6 +380,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
             }
             // Provjeri kvalitetu poravnanja
             float mismatch_ratio = (float)count_mismatches / total_length;
+            cout << "DEBUG: Local alignment mismatch ratio: " << mismatch_ratio << "\n";
             if (mismatch_ratio > T1 && t_i.find_first_not_of('N') != string::npos) {
                 mismatch++;
             }
@@ -376,6 +405,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
             }
             // Provjeri kvalitetu poravnanja
             float mismatch_ratio = (float)count_mismatches / total_length;
+            cout << "DEBUG: Second pass mismatch ratio: " << mismatch_ratio << "\n";            
             if (mismatch_ratio > T1  && t_i.find_first_not_of('N') != string::npos) {
                 mismatch++;
             }
@@ -384,6 +414,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
         if (mismatch > T2) {
             // Broj neuspjeha je prevelik, zaustavlja se lokalno poravanje i pocinje globalno
+            cout << "DEBUG: Mismatch threshold exceeded. Switching to global alignment.\n";
             cout << "Lokalno poravnanje neuspjesno, zapocinje globalno!\n";
 
             // Obrisi prethodni sadrzaj temp_file.
@@ -429,9 +460,9 @@ void compress_genome(const string& reference_file, const string& target_file, co
             cout << pos.mismatch;
             cout << "\n\n";
             if (pos.mismatch == "") {
-                temp_file << " (" << pos.start_reference << ", " << pos.length << ")";
+                temp_file << "(" << pos.start_reference << "," << pos.length << ")";
             } else {
-                temp_file << " " <<  pos.mismatch;
+                temp_file <<  pos.mismatch;
             }
         }
     }
@@ -440,12 +471,15 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
     // Delta kodiranje rezultata.
     // delta_encode(temp_file_path);
+    cout << "DEBUG: delta_encode() started.\n";
 
     compress_genome(temp_file_path, output_file_path);
+    cout << "DEBUG: compress_genome() (reference/target) finished.\n";
 } 
 
 // Main function.
 int main(int argc, char* argv[]) {
+    cout << "DEBUG: main() started.\n";
     cout << "Received " << argc << " arguments.\n";
     if (argc != 4) {
         cerr << "Usage: " << argv[0] << " <reference_file> <target_file> <output_folder>\n";
@@ -464,5 +498,6 @@ int main(int argc, char* argv[]) {
         cerr << "Error: " << ex.what() << "\n";
         return 1;
     }
+    cout << "DEBUG: main() finished successfully.\n";
     return 0;
 }

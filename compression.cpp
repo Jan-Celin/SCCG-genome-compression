@@ -18,66 +18,50 @@ using namespace std;
 
 struct Position {
     int start_reference = -1; // p
-    int length = 0;          // l
+    int length = 0;           // l
     string mismatch = "";
 };
 
-// Function: extend_alignment
-// Inputs:
-//    Sr: Reference segment/sequence.
-//    St: Target segment/sequence.
-//    p:  Starting position in Sr.
-//    index: Starting position in St.
-//    k:  Length of the k-mer.
-// Returns: Length of the extended alignment.
-// This function extends the alignment from position p in Sr and index in St,
-// checking for matches until a mismatch is found or the end of either sequence is reached.
-int extend_alignment(const string& Sr, const string& St, int p, int index, int k) {
-    //cout << "DEBUG: extend_alignment() called with p=" << p << ", index=" << index << "\n";
+// Inline to encourage inlining in performance-critical code
+inline int extend_alignment(const string& Sr, const string& St, int p, int index, int k) {
     int l = k; // starting with k characters that are known to match
     while (p + l + 1 < (int)Sr.size() && index + l + 1 < (int)St.size() &&
            Sr[p + l + 1] == St[index + l + 1]) {
-        l++;
+        ++l;
     }
-    //cout << "DEBUG: extend_alignment() returning l=" << l << "\n";
     return l;
 }
 
-// Function: match_sequences
-// Inputs:
-//    Sr: Reference segment/sequence.
-//    St: Target segment/sequence.
-//    k: Length of the k-mer.
-//    m: Limit of search range (for global matching distance)
-//    global: Boolean flag, if true enables global matching.
 vector<Position> match_sequences(const string& Sr, const string& St, int k, int m, bool global) {
-    // cout << "DEBUG: match_sequences() started. global=" << global << ", k=" << k << ", m=" << m << "\n";
-    // 1. Get length L of target St.
+    // 1. Get length of target.
     int L = St.size();
     
     // 2. Build hash table H from all k-mers in Sr.
-    //    This maps each k-mer to a vector of its starting positions in Sr.
-    // Using string_view to avoid extra allocations from substr.
     unordered_map<string_view, vector<int>> H;
+    // Reserve capacity to avoid rehashing (number of k-mers = Sr.size()-k+1)
+    H.reserve(Sr.size() - k + 1);
     for (int i = 0; i <= (int)Sr.size() - k; i++) {
-        // Creating a string_view from Sr starting at i with length k.
         string_view kmer(&Sr[i], k);
         H[kmer].push_back(i);
     }
     
-    // 3. Initialize index, previous match end, results,
-    //    and an accumulator for mismatched characters.
+    // 3. Initialize variables.
     int index = 0;
     int prev_match_end = -1;
     vector<Position> results;
-    Position currentMismatch;   // Accumulate mismatches.
+    // Heuristic: reserve results capacity based on target length.
+    results.reserve(L / k);
+    
+    Position currentMismatch;
+    // Preallocate to reduce dynamic allocation overhead.
+    currentMismatch.mismatch.reserve(L);
     
     // For progress indicator if global alignment is enabled.
     int lastPrintedProgress = 0;
     
-    // 4. Main loop: while index < L - k + 1. Doing until L to record mismatches at the end of St.
+    // 4. Main loop.
     while (index < L - k + 1) {
-        // If global, print progress every 2%
+        // Print progress every 2% if global.
         if (global) {
             int progress = (index * 100) / L;
             if (progress >= lastPrintedProgress + 2) {
@@ -86,20 +70,18 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
             }
         }
         
-        // 4.1 Extract the k-mer starting at index in St.
-        // Using string_view to avoid copying via substr.
+        // Use string_view to extract k-mer from target (avoiding allocation).
         string_view kmer_prime(&St[index], k);
         
-        // 4.2 If no match for kmer_prime is found in H:
         if (H.find(kmer_prime) == H.end()) {
-            // Accumulate the mismatched character.
+            // Instead of using substr to extract one character, use push_back.
             currentMismatch.mismatch.push_back(St[index]);
             index++;  // Increment index by 1.
             continue;
         } else {
             if (global) {
                 bool candidateInRange = false;
-                // Check if there is at least one candidate p that is in range.
+                // Check if any candidate is within range.
                 for (int p : H[kmer_prime]) {
                     if (prev_match_end == -1 || abs(p - prev_match_end) <= m) {
                         candidateInRange = true;
@@ -108,101 +90,73 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
                 }
                 if (!candidateInRange) {
                     currentMismatch.mismatch.push_back(St[index]);
-                    index++; // no candidate in range, continue searching
+                    index++;
                     continue;
                 }
-                // Push current mismatches to clear them.
                 if (!currentMismatch.mismatch.empty()) {
                     results.push_back(currentMismatch);
-                    currentMismatch.mismatch = "";
+                    currentMismatch.mismatch.clear();
+                    currentMismatch.mismatch.reserve(L - index);
                 }
             } else {
-                // For local matching, push mismatches only if there's something accumulated.
                 if (!currentMismatch.mismatch.empty()) {
                     results.push_back(currentMismatch);
-                    currentMismatch.mismatch = "";
+                    currentMismatch.mismatch.clear();
+                    currentMismatch.mismatch.reserve(L - index);
                 }
             }
             
-            // 9. Initialize variables for best candidates.
+            // 9. Candidate selection.
             int lmax1 = 0, lmax2 = 0;
             int pn1 = 0, pn2 = 0;
             int ln1 = 0, ln2 = 0;
-            
-            // 10. For each occurrence of kmer_prime in H.
             for (int p : H[kmer_prime]) {
-                // 11. Extend the alignment from position p in Sr and index in St.
                 int l = extend_alignment(Sr, St, p, index, k);
-                
-                // 12. If global is enabled and the candidate's starting position p is 
-                //     within m positions of the previous match's end:
                 if (global && (prev_match_end == -1 || abs(p - prev_match_end) <= m)) {
-                    // 13-20: Update global candidate.
                     if (l == lmax2) {
-                        // 14. If this candidate's p is nearer (closer) to prev_match_end than the current candidate:
-                        if (pn2 == 0 || abs(p - prev_match_end) < abs(pn2 - prev_match_end)) {
-                            // 15. Update pn2 with this candidate.
+                        if (pn2 == 0 || abs(p - prev_match_end) < abs(pn2 - prev_match_end))
                             pn2 = p;
-                        }
                     } else if (l > lmax2) {
-                        // 17-18. New longer match: update lmax2, pn2, and ln2.
-                        lmax2 = l;
-                        pn2 = p;
-                        ln2 = l;
+                        lmax2 = l; pn2 = p; ln2 = l;
                     }
                 }
-                
-                // 21. Otherwise (or regardless) update the best local candidate.
                 if (l == lmax1) {
-                    // 22. If p of the candidate is nearer to prev_match_end than the current local candidate:
-                    if (pn1 == 0 || abs(p - prev_match_end) < abs(pn1 - prev_match_end)) {
-                        // 23. Update pn1.
+                    if (pn1 == 0 || abs(p - prev_match_end) < abs(pn1 - prev_match_end))
                         pn1 = p;
-                    }
                 } else if (l > lmax1) {
-                    // 25-26. New longer match: update lmax1, pn1, and ln1.
-                    lmax1 = l;
-                    pn1 = p;
-                    ln1 = l;
+                    lmax1 = l; pn1 = p; ln1 = l;
                 }
             }
             
-            // 29-31: Choose final candidate based on the global flag.
+            // 29-31: Choose final candidate.
             int final_p, final_l;
             if (global && pn2 != 0) {
-                final_p = pn2;
-                final_l = ln2;
+                final_p = pn2; final_l = ln2;
             } else {
-                final_p = pn1;
-                final_l = ln1;
+                final_p = pn1; final_l = ln1;
             }
             
-            // Update previous match end (for global evaluation).
+            // Update previous match end.
             prev_match_end = final_p + final_l - 1;
             
             // 32. Record the match.
             Position matchRes;
             matchRes.start_reference = final_p;
             matchRes.length = final_l;
-            // For a match, we leave mismatch as an empty string.
             matchRes.mismatch = "";
             results.push_back(matchRes);
             
             // 33. Update index.
-            // cout << "DEBUG " << index << ": match found at reference " << final_p << " with length " << final_l << "\n";
-            index = index + final_l;
+            index += final_l;
         }
     }
     
-    // After the loop, if any mismatches remain, add them as a final entry.
-    if (index < L) {
-        currentMismatch.mismatch.append(St.substr(index)); // Append all remaining characters after index.
-    }
-    if (!currentMismatch.mismatch.empty()) {
+    // Append any remaining characters (using append overload avoids temporary substring).
+    if (index < L)
+        currentMismatch.mismatch.append(St, index, string::npos);
+    if (!currentMismatch.mismatch.empty())
         results.push_back(currentMismatch);
-    }
     
-    // 35. Return the results.
     cout << "DEBUG: match_sequences() finished with " << results.size() << " results.\n";
     return results;
 }
@@ -456,9 +410,9 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
         // Spremi rezultate u temp_file.
         for (Position pos : positions) {
-            cout << " (" << pos.start_reference << ", " << pos.length << ")\n";
-            cout << pos.mismatch;
-            cout << "\n\n";
+            //cout << " (" << pos.start_reference << ", " << pos.length << ")\n";
+            //cout << pos.mismatch;
+            //cout << "\n\n";
             if (pos.mismatch == "") {
                 temp_file << "(" << pos.start_reference << "," << pos.length << ")";
             } else {

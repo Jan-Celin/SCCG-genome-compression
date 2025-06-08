@@ -333,16 +333,18 @@ void compress_genome(const string& reference_file, const string& target_file, co
                 }
             }
             // Provjeri kvalitetu poravnanja
-            float mismatch_ratio = (float)count_mismatches / total_length;
+            float mismatch_ratio = (float)count_mismatches / t_i.length();
             cout << "DEBUG: Local alignment mismatch ratio: " << mismatch_ratio << "\n";
             if (mismatch_ratio > T1 && t_i.find_first_not_of('N') != string::npos) {
                 mismatch++;
+                continue;
             }
+            mismatch = 0;
             continue;
         }
 
         // Lokalno poravnanje (drugi prolaz, s duljinom k-mera k').
-        positions = match_sequences(r_i, t_i, k, 0, false);
+        positions = match_sequences(r_i, t_i, k2, 0, false);
         if (positions.size() == 1 && positions[0].mismatch == "" || positions.size() > 1) {
             // Poravnanje je uspjesno.
             int count_mismatches = 0;
@@ -358,12 +360,22 @@ void compress_genome(const string& reference_file, const string& target_file, co
                 }
             }
             // Provjeri kvalitetu poravnanja
-            float mismatch_ratio = (float)count_mismatches / total_length;
+            float mismatch_ratio = (float)count_mismatches / t_i.length();
             cout << "DEBUG: Second pass mismatch ratio: " << mismatch_ratio << "\n";            
             if (mismatch_ratio > T1  && t_i.find_first_not_of('N') != string::npos) {
                 mismatch++;
+                continue;
             }
+            mismatch = 0;
             continue;
+        }
+
+        if (t_i.find_first_not_of('N') != string::npos) {
+            // Ako je poravnanje neuspjesno, povecaj broj neuspjesnih pokusaja.
+            mismatch++;
+        } else {
+            // Ako je cijeli segment N, resetiraj broj neuspjesnih pokusaja.
+            mismatch = 0;
         }
 
         if (mismatch > T2) {
@@ -373,7 +385,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
             // Obrisi prethodni sadrzaj temp_file.
             temp_file.close();
-            temp_file.open("temp_file.txt", ofstream::out | ofstream::trunc);
+            temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
             temp_file.close();
             
             local = false;

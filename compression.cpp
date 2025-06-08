@@ -32,7 +32,7 @@ inline int extend_alignment(const string& Sr, const string& St, int p, int index
     return l;
 }
 
-vector<Position> match_sequences(const string& Sr, const string& St, int k, int m, bool global) {
+vector<Position> match_sequences(const string& Sr, const string& St, int k, int m, bool global, int ind = 0) {
     // 1. Get length of target.
     int L = St.size();
     
@@ -46,7 +46,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     }
     
     // 3. Initialize variables.
-    int index = 0;
+    int index = ind;
     int prev_match_end = -1;
     vector<Position> results;
     // Heuristic: reserve results capacity based on target length.
@@ -203,8 +203,7 @@ void read_genomes_from_files(const string& reference_file, const string& target_
 }
 
 void delta_encode(string file_path) {
-    // Izmijeni pozicije iz datoteke na nacin da se koristi delta enkodiranje.
-    // Svaka pocetna pozicija (osim prve) je zabiljezena kao razlika od prethodne.
+    // Read the entire file into a string.
     ifstream file(file_path);
     if (!file.is_open()) {
         cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
@@ -216,26 +215,44 @@ void delta_encode(string file_path) {
     file.close();
 
     int previous_start_ref = 0;
+    size_t search_start = 0;
 
-    // TODO: provjeriti radi li dobro.
-    for (int i = 1; i < temp_file.size(); ++i) {
-        if (temp_file[i] == '(') {
-            size_t start_pos = i + 1;
-            size_t end_pos = temp_file.find(')', start_pos);
-            string position = temp_file.substr(start_pos, end_pos - start_pos);
-            size_t comma_pos = position.find(',');
-            int start_ref = stoi(position.substr(0, comma_pos));
-            int length = stoi(position.substr(comma_pos + 1));
-            // Delta enkodiranje.
-            if (i > 0) {
-                start_ref -= previous_start_ref;
-            }
-            previous_start_ref = start_ref;
-            temp_file.replace(start_pos, end_pos - start_pos + 1, to_string(start_ref) + "," + to_string(length));
+    // Find all tokens in the format (start_reference,length) and replace start_reference with delta.
+    while (true) {
+        size_t open_pos = temp_file.find('(', search_start);
+        if (open_pos == string::npos)
+            break;  // No more tokens.
+
+        size_t start_pos = open_pos + 1;
+        size_t end_pos = temp_file.find(')', start_pos);
+        if (end_pos == string::npos)
+            break;  // Malformed token; no matching ')'.
+
+        // Extract the token between the parentheses.
+        string token = temp_file.substr(start_pos, end_pos - start_pos);
+        size_t comma_pos = token.find(',');
+        if (comma_pos == string::npos) {
+            // If no comma, skip this token.
+            search_start = end_pos + 1;
+            continue;
         }
+        // Parse the original start reference.
+        int start_ref = stoi(token.substr(0, comma_pos));
+        int delta = start_ref - previous_start_ref;
+        // Update previous_start_ref with the absolute value.
+        previous_start_ref = start_ref;
+
+        // Build the new token content: replace the original number with the delta,
+        // and keep the rest (from the comma onward) unchanged.
+        string new_token = to_string(delta) + token.substr(comma_pos);
+        // Replace the existing token content with the new token.
+        temp_file.replace(start_pos, token.size(), new_token);
+
+        // Move search_start to after the closing parenthesis.
+        search_start = end_pos;
     }
 
-    // Spremi izmijenjeni sadrzaj u datoteku.
+    // Write the modified content back into the file.
     ofstream out_file(file_path, ofstream::out | ofstream::trunc);
     if (!out_file.is_open()) {
         cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
@@ -317,7 +334,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
         string t_i = target_segments[i];
 
         // Lokalno poravnanje (prvi prolaz, s duljinom kmera k).
-        vector<Position> positions = match_sequences(r_i, t_i, k, 0, false);
+        vector<Position> positions = match_sequences(r_i, t_i, k, 0, false, i*L);
         if (positions.size() == 1 && positions[0].mismatch == "" || positions.size() > 1) {
             // Poravnanje je uspjesno.
             int count_mismatches = 0;
@@ -344,7 +361,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
         }
 
         // Lokalno poravnanje (drugi prolaz, s duljinom k-mera k').
-        positions = match_sequences(r_i, t_i, k2, 0, false);
+        positions = match_sequences(r_i, t_i, k2, 0, false, i*L);
         if (positions.size() == 1 && positions[0].mismatch == "" || positions.size() > 1) {
             // Poravnanje je uspjesno.
             int count_mismatches = 0;
@@ -381,7 +398,6 @@ void compress_genome(const string& reference_file, const string& target_file, co
         if (mismatch > T2) {
             // Broj neuspjeha je prevelik, zaustavlja se lokalno poravanje i pocinje globalno
             cout << "DEBUG: Mismatch threshold exceeded. Switching to global alignment.\n";
-            cout << "Lokalno poravnanje neuspjesno, zapocinje globalno!\n";
 
             // Obrisi prethodni sadrzaj temp_file.
             temp_file.close();
@@ -390,6 +406,14 @@ void compress_genome(const string& reference_file, const string& target_file, co
             
             local = false;
             break;
+        }
+    }
+
+    // After the main for loop of segment comparisons:
+    if (local && target_segments.size() > num_iterations) {
+        cout << "DEBUG: Adding remaining target segments as mismatches.\n";
+        for (size_t j = num_iterations; j < target_segments.size(); ++j) {
+            temp_file << target_segments[j];
         }
     }
 

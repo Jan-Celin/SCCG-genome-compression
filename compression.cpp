@@ -264,8 +264,8 @@ void delta_encode(string file_path) {
     out_file.close();
 }
 
-void compress_genome(const string& input_file, const string& output_file) {
-    // Komprimiraj datoteku (PPMd algoritmom od 7-zipa).
+void compress_genome_7z(const string& input_file, const string& output_file) {
+    // Komprimiraj datoteku (7-zip-om, kao u radu).
     string command = "7z a -mx=9 " + output_file + ".7z " + input_file;
     int result = system(command.c_str());
 
@@ -284,7 +284,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
     read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
     
-    string temp_file_path = output_folder + "/temp_file.txt";
+    string temp_file_path = output_folder + "/compressed_genome.txt";
     string output_file_path = output_folder + "/compressed_genome.txt";
 
     // Stvaranje privremene datoteke za spremanje rezultata.
@@ -292,8 +292,8 @@ void compress_genome(const string& reference_file, const string& target_file, co
     ofstream temp_file(temp_file_path, ofstream::out | ofstream::trunc);
 
     // Prebaci sve znakove u velika slova i zapamti indekse malih slova u temp_file
-    for (int i = 0; i < reference_genome.length(); ++i) {
-        if (islower(reference_genome[i])) {
+    for (int i = 0; i < target_genome.length(); ++i) {
+        if (islower(target_genome[i])) {
             temp_file << i << ",";
         }
     }
@@ -342,11 +342,11 @@ void compress_genome(const string& reference_file, const string& target_file, co
             int total_length = 0;
             for (Position pos : positions) {
                 if (pos.mismatch == "") {
-                    temp_file << " (" << pos.start_reference << "," << pos.length << ")";
+                    temp_file << "(" << pos.start_reference << "," << pos.length << ")";
                     total_length += pos.length;
                 }
                 else {
-                    temp_file << " " << pos.mismatch;
+                    temp_file << pos.mismatch;
                     count_mismatches += pos.mismatch.length();
                 }
             }
@@ -366,11 +366,11 @@ void compress_genome(const string& reference_file, const string& target_file, co
             int total_length = 0;
             for (Position pos : positions) {
                 if (pos.mismatch == "") {
-                    temp_file << " (" << pos.start_reference << "," << pos.length << ")";
+                    temp_file << "(" << pos.start_reference << "," << pos.length << ")";
                     total_length += pos.length;
                 }
                 else {
-                    temp_file << " " << pos.mismatch;
+                    temp_file << pos.mismatch;
                     count_mismatches += pos.mismatch.length();
                 }
             }
@@ -398,11 +398,15 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
     // Ako lokalno poravnanje nije uspjelo
     if (!local) {
+        reference_genome.clear();
+        target_genome.clear();
+        read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
+
         temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
         // Prebaci sve znakove u velika slova i zapamti indekse malih slova u temp_file
         temp_file << "lower: ";
-        for (int i = 0; i < reference_genome.length(); ++i) {
-            if (islower(reference_genome[i])) {
+        for (int i = 0; i < target_genome.length(); ++i) {
+            if (islower(target_genome[i])) {
                 temp_file << i << ",";
             }
         }
@@ -425,13 +429,10 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
         // Spremi rezultate u temp_file.
         for (Position pos : positions) {
-            cout << " (" << pos.start_reference << ", " << pos.length << ")\n";
-            cout << pos.mismatch;
-            cout << "\n\n";
             if (pos.mismatch == "") {
-                temp_file << " (" << pos.start_reference << ", " << pos.length << ")";
+                temp_file << "(" << pos.start_reference << "," << pos.length << ")";
             } else {
-                temp_file << " " <<  pos.mismatch;
+                temp_file<<  pos.mismatch;
             }
         }
     }
@@ -439,9 +440,9 @@ void compress_genome(const string& reference_file, const string& target_file, co
     temp_file.close();
 
     // Delta kodiranje rezultata.
-    // delta_encode(temp_file_path);
+    //delta_encode(temp_file_path);
 
-    compress_genome(temp_file_path, output_file_path);
+    compress_genome_7z(temp_file_path, output_file_path);
 } 
 
 // Main function.

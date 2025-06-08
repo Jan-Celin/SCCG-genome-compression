@@ -12,497 +12,462 @@
 #include <climits>
 #include <filesystem>
 #include <unordered_map>
+#include <string_view>
 
 using namespace std;
 
-class Encoder {
-public:
-    // Hyperparameters (same as in Java)
-    int kmer_length = 21; //21
-    double T1 = 0.5;
-    int T2 = 4;
-    const int sub_length = 30000;
-    bool local = true;
+struct Position {
+    int start_reference = -1; // p
+    int length = 0;           // l
+    string mismatch = "";
+};
 
-    class Kmer {
-    public:
-        std::string kmer;
-        int kmerstart;
-    };
-
-    std::unordered_map<int, std::vector<Kmer>> kmer_map;
-
-    class Position {
-    public:
-        int start_reference;
-        int end_reference;
-        int start_target;
-        int end_target;
-    };
-
-    void create_hash_map_L(const std::string& reference, int kmer_length) {
-        std::string Nkmer = "";
-        for (int j = 0; j < kmer_length; ++j) {
-            Nkmer += 'N';
-        }
-        int Nkmer_hash_value = std::hash<std::string>{}(Nkmer);
-        for (int i = 0; i < (int)reference.length() - kmer_length + 1; ++i) {
-            std::string kmer = reference.substr(i, kmer_length);
-            int hash_value = std::hash<std::string>{}(kmer);
-            Kmer new_kmer;
-            new_kmer.kmer = kmer;
-            new_kmer.kmerstart = i;
-            if (kmer_map.find(hash_value) == kmer_map.end()) {
-                kmer_map[hash_value] = std::vector<Kmer>();
-            }
-            kmer_map[hash_value].push_back(new_kmer);
-
-            // Skip N characters if hash_value corresponds to Nkmer.
-            if (hash_value == Nkmer_hash_value) {
-                while ((reference[i] == 'N' || reference[i] == 'n') && 
-                       i < (int)reference.length() - kmer_length + 1) {
-                    ++i;
-                }
-            }
-        }
+// Inline to encourage inlining in performance-critical code
+inline int extend_alignment(const string& Sr, const string& St, int p, int index, int k) {
+    int l = k; // starting with k characters that are known to match
+    while (p + l + 1 < (int)Sr.size() && index + l + 1 < (int)St.size() &&
+           Sr[p + l + 1] == St[index + l + 1]) {
+        ++l;
     }
+    return l;
+}
 
-    std::vector<Position> Lmatch(const std::string& reference, const std::string& target, 
-                                 int kmer_length, double T1, double T2, int i = 0) {
-        create_hash_map_L(reference, kmer_length);
-        std::vector<Position> pos_list;
-        std::set<int> used_reference_positions;  // Track used reference indices
-        while (i <= (int)target.length() - kmer_length) {
-            std::string kmer = target.substr(i, kmer_length);
-            int hash_value = std::hash<std::string>{}(kmer);
-            if (kmer_map.find(hash_value) == kmer_map.end()) {
-                ++i;
-                continue;
-            }
-            const std::vector<Kmer>& kmer_list = kmer_map[hash_value];
-            int max_increment = -1;
-            int best_start_ref = -1;
-            for (const auto& new_kmer : kmer_list) {
-                if (new_kmer.kmer != kmer)
-                    continue;
-                int kmer_start = new_kmer.kmerstart;
-                int end_reference = kmer_start + kmer_length - 1;
-                int end_target = i + kmer_length - 1;
-                int max_extend = std::min((int)reference.size() - 1 - end_reference, 
-                                          (int)target.size() - 1 - end_target);
-                int increment = 0;
-                for (; increment < max_extend; ++increment) {
-                    if (reference[end_reference + 1 + increment] != target[end_target + 1 + increment])
-                        break;
-                }
-                // Check if this region overlaps any already-used positions.
-                bool overlaps = false;
-                for (int p = kmer_start; p <= kmer_start + kmer_length + increment - 1; ++p) {
-                    if (used_reference_positions.count(p)) {
-                        overlaps = true;
-                        break;
-                    }
-                }
-                if (overlaps)
-                    continue;
-                if (increment > max_increment || (increment == max_increment && kmer_start < best_start_ref)) {
-                    max_increment = increment;
-                    best_start_ref = kmer_start;
-                }
-            }
-            if (best_start_ref == -1) {
-                ++i;
-                continue;
-            }
-            Position pos;
-            pos.start_reference = best_start_ref;
-            pos.end_reference = best_start_ref + kmer_length + max_increment - 1;
-            pos.start_target = i;
-            pos.end_target = i + kmer_length + max_increment - 1;
-            pos_list.push_back(pos);
-            // Mark used positions.
-            for (int p = pos.start_reference; p <= pos.end_reference; ++p) {
-                used_reference_positions.insert(p);
-            }
-            i = pos.end_target + 1;  // Advance past the matched region.
-        }
-        return pos_list;
+vector<Position> match_sequences(const string& Sr, const string& St, int k, int m, bool global) {
+    // 1. Get length of target.
+    int L = St.size();
+    
+    // 2. Build hash table H from all k-mers in Sr.
+    unordered_map<string_view, vector<int>> H;
+    // Reserve capacity to avoid rehashing (number of k-mers = Sr.size()-k+1)
+    H.reserve(Sr.size() - k + 1);
+    for (int i = 0; i <= (int)Sr.size() - k; i++) {
+        string_view kmer(&Sr[i], k);
+        H[kmer].push_back(i);
     }
-
-    std::vector<Position> Gmatch(const std::string& reference, const std::string& target, int kmer_length) {
-        constexpr int LIMIT = 100;  // same as Java's limit
-        constexpr int MAXSEQ = 1073741824;  // same as Java's maxseq
-        std::vector<int> kmer_location(MAXSEQ, -1);
-        std::vector<int> next_kmer(reference.size(), -1);
-        std::vector<Position> matches;
-        std::set<int> used_reference_positions; // Track used reference indices
-
-        // Build global hash table.
-        for (size_t i = 0; i + kmer_length <= reference.size(); ++i) {
-            std::string kmer = reference.substr(i, kmer_length);
-            long long key = std::abs(static_cast<long long>(std::hash<std::string>{}(kmer)));
-            if (key == static_cast<long long>(INT_MIN)) key = 0;
-            while (key > MAXSEQ - 1) key = key / 2;
-            next_kmer[i] = kmer_location[(int)key];
-            kmer_location[(int)key] = static_cast<int>(i);
-        }
-        int index = 0;
-        int lastEIR = 0;
-        while (index + kmer_length <= (int)target.size()) {
-            int increment = 0, most_incre = 0;
-            std::string kmer = target.substr(index, kmer_length);
-            long long key = std::abs(static_cast<long long>(std::hash<std::string>{}(kmer)));
-            if (key == static_cast<long long>(INT_MIN)) key = 0;
-            while (key > MAXSEQ - 1) key = key / 2;
-            if (kmer_location[(int)key] == -1) {
-                index = index + 1;
-                continue;
+    
+    // 3. Initialize variables.
+    int index = 0;
+    int prev_match_end = -1;
+    vector<Position> results;
+    // Heuristic: reserve results capacity based on target length.
+    results.reserve(L / k);
+    
+    Position currentMismatch;
+    // Preallocate to reduce dynamic allocation overhead.
+    currentMismatch.mismatch.reserve(L);
+    
+    // For progress indicator if global alignment is enabled.
+    int lastPrintedProgress = 0;
+    
+    // 4. Main loop.
+    while (index < L - k + 1) {
+        // Print progress every 2% if global.
+        if (global) {
+            int progress = (index * 100) / L;
+            if (progress >= lastPrintedProgress + 2) {
+                cout << "Progress: " << progress << "%\n";
+                lastPrintedProgress = progress;
             }
-            int startIndex = INT_MAX;
-            most_incre = 0;
-            bool match = false;
-            // Try to find matches in a limit range.
-            for (int k = kmer_location[(int)key]; k != -1; k = next_kmer[k]) {
-                increment = 0;
-                std::string Rkmer = reference.substr(k, kmer_length);
-                if (kmer != Rkmer) continue;
-                if (!matches.empty())
-                    lastEIR = matches.back().end_reference;
-                else
-                    lastEIR = 0;
-                if (k - lastEIR > LIMIT || k - lastEIR < -LIMIT)
-                    continue;
-                // Extend match.
-                int ref_idx = k + kmer_length;
-                int tar_idx = index + kmer_length;
-                while (ref_idx < (int)reference.size() && tar_idx < (int)target.size() &&
-                       reference[ref_idx] == target[tar_idx]) {
-                    ref_idx++;
-                    tar_idx++;
-                    increment++;
-                }
-                // Check for overlap.
-                bool overlaps = false;
-                for (int p = k; p <= k + kmer_length + increment - 1; ++p) {
-                    if (used_reference_positions.count(p)) {
-                        overlaps = true;
-                        break;
-                    }
-                }
-                if (overlaps)
-                    continue;
-                match = true;
-                if (increment == most_incre) {
-                    if (matches.size() > 1) {
-                        if (k - lastEIR < startIndex - lastEIR)
-                            startIndex = k;
-                    }
-                } else if (increment > most_incre) {
-                    most_incre = increment;
-                    startIndex = k;
-                }
-            }
-            // If no match in limit, search whole sequence.
-            if (!match) {
-                for (int k = kmer_location[(int)key]; k != -1; k = next_kmer[k]) {
-                    increment = 0;
-                    std::string Rkmer = reference.substr(k, kmer_length);
-                    if (kmer != Rkmer) continue;
-                    int ref_idx = k + kmer_length;
-                    int tar_idx = index + kmer_length;
-                    while (ref_idx < (int)reference.size() && tar_idx < (int)target.size() &&
-                           reference[ref_idx] == target[tar_idx]) {
-                        ref_idx++;
-                        tar_idx++;
-                        increment++;
-                    }
-                    bool overlaps = false;
-                    for (int p = k; p <= k + kmer_length + increment - 1; ++p) {
-                        if (used_reference_positions.count(p)) {
-                            overlaps = true;
-                            break;
-                        }
-                    }
-                    if (overlaps)
-                        continue;
-                    if (increment == most_incre) {
-                        if (matches.size() > 1) {
-                            if (k - lastEIR < startIndex - lastEIR)
-                                startIndex = k;
-                        }
-                    } else if (increment > most_incre) {
-                        most_incre = increment;
-                        startIndex = k;
-                    }
-                }
-            }
-            if (startIndex == INT_MAX) {
-                index = index + 1;
-                continue;
-            }
-            Position pos;
-            pos.start_target = index;
-            pos.end_target = index + kmer_length + most_incre - 1;
-            pos.start_reference = startIndex;
-            pos.end_reference = startIndex + kmer_length + most_incre - 1;
-            matches.push_back(pos);
-            for (int p = pos.start_reference; p <= pos.end_reference; ++p) {
-                used_reference_positions.insert(p);
-            }
-            index = pos.end_target + 1;
-        }
-        return matches;
-    }
-
-    std::string readFile(const std::string& filename) {
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            throw std::runtime_error("Could not open file: " + filename);
-        }
-        std::ostringstream oss;
-        oss << file.rdbuf();
-        return oss.str();
-    }
-
-    void writeTextToFile(const std::string& filename, const std::string& text, bool append) {
-        std::ofstream file(filename, append ? std::ios::app : std::ios::trunc);
-        if (!file.is_open()) {
-            throw std::runtime_error("Could not write to file: " + filename);
-        }
-        file << text;
-    }
-
-    void postprocessPositions(const std::string& infile, const std::string& outfile) {
-        std::ifstream inputFile(infile);
-        if (!inputFile.is_open()) {
-            std::cerr << "Error opening input file: " << infile << "\n";
-            return;
-        }
-        std::string line;
-        std::stringstream merged;
-        std::vector<int> range;
-        // Merge consecutive ranges.
-        while (std::getline(inputFile, line)) {
-            if (line.find(',') != std::string::npos) {
-                auto commaPos = line.find(',');
-                int begin = std::stoi(line.substr(0, commaPos));
-                int end = std::stoi(line.substr(commaPos + 1));
-                if (!range.empty() && range.back() != begin - 1) {
-                    merged << range.front() << "," << range.back() << "\n";
-                    range.clear();
-                }
-                range.push_back(begin);
-                range.push_back(end);
-            } else if (!line.empty()) {
-                if (!range.empty()) {
-                    merged << range.front() << "," << range.back() << "\n";
-                    range.clear();
-                }
-                merged << line << "\n";
-            }
-        }
-        if (!range.empty()) {
-            merged << range.front() << "," << range.back() << "\n";
-        }
-        inputFile.close();
-
-        std::istringstream mergedStream(merged.str());
-        std::ostringstream deltaEncoded;
-        int prev = 0;
-        bool firstLine = true;
-        while (std::getline(mergedStream, line)) {
-            if (line.find(',') != std::string::npos) {
-                int commaPos = line.find(',');
-                int begin = std::stoi(line.substr(0, commaPos));
-                int end = std::stoi(line.substr(commaPos + 1));
-                if (firstLine) {
-                    deltaEncoded << begin << "," << (end - begin) << "\n";
-                    firstLine = false;
-                } else {
-                    deltaEncoded << (begin - prev) << "," << (end - begin) << "\n";
-                }
-                prev = end;
-            } else if (!line.empty()) {
-                deltaEncoded << line << "\n";
-            }
-        }
-        std::ofstream outputFile(outfile, std::ios::trunc);
-        outputFile << deltaEncoded.str();
-    }
-
-    void run7zip(const std::string& filename, const std::string& outputFolder) {
-        std::string compressed = outputFolder + "/compressed.7z";
-        std::string command = "\"C:\\7-Zip\\7z.exe\" a -t7z \"" + compressed + "\" \"" + filename + "\"";
-        if (std::system(command.c_str()) != 0) {
-            std::cerr << "7zip compression failed for " << filename << "\n";
-        } else {
-            std::cout << "File compressed successfully: " << compressed << "\n";
-        }
-    }
-
-    void compress_genome(const std::string& referenceFile, const std::string& targetFile,
-                         const std::string& outputFolder) {
-        if (!std::filesystem::exists(outputFolder)) {
-            std::filesystem::create_directory(outputFolder);
-        }
-        std::string refSeq = readFile(referenceFile);
-        std::string tarSeq = readFile(targetFile);
-
-        auto posRef = refSeq.find('\n');
-        if (posRef != std::string::npos) {
-            refSeq = refSeq.substr(posRef + 1);
-        }
-        auto posTar = tarSeq.find('\n');
-        std::string meta_data;
-        if (posTar != std::string::npos) {
-            meta_data = tarSeq.substr(0, posTar);
-            tarSeq = tarSeq.substr(posTar + 1);
-        }
-
-        if (tarSeq.size() < sub_length * 5) {
-            local = false;
-            std::cout << "Target too short for local matching. Will use global matching.\n";
-        } else if (tarSeq.size() < sub_length * 1333) {
-            T1 = 0.1;
-            T2 = 0;
-            std::cout << "Adjusted thresholds for short target.\n";
-        }
-
-        std::string finalFile = outputFolder + "/final.txt";
-        std::string interimFile = outputFolder + "/interim.txt";
-        {
-            std::ofstream temp(interimFile, std::ios::trunc);
-            if (!temp.is_open()) {
-                throw std::runtime_error("Could not create interim file: " + interimFile);
-            }
-        }
-        writeTextToFile(finalFile, meta_data + "\n" + std::to_string(tarSeq.size()) + "\n", false);
-
-        bool fallbackGlobal = false;
-        std::string accumulatedText;
-        if (local) {
-            // Local Matching Phase.
-            int sot = 0;                     // Start offset in target.
-            int eot = sub_length;            // End offset for target segment.
-            int sor = 0;                     // Start offset in reference.
-            int eor = sub_length;            // End offset for reference segment.
-            int mismatch = 0;
-            while (sot < (int)tarSeq.size()) {
-                // If the segment exceeds target or reference bounds, append the rest.
-                if (eot >= (int)tarSeq.size() || eor >= (int)refSeq.size()) {
-                    accumulatedText += tarSeq.substr(sot);
-                    std::cout << "Reached end of sequence, appending remainder.\n";
-                    break;
-                }
-                std::string refSegment = refSeq.substr(sor, eor - sor);
-                std::string tarSegment = tarSeq.substr(sot, eot - sot);
-                auto matches = Lmatch(refSegment, tarSegment, kmer_length, T1, T2);
-                if (matches.empty()) {
-                    // Try with a lower kmer length.
-                    int temp_kmer = 11;
-                    matches = Lmatch(refSegment, tarSegment, temp_kmer, T1, T2);
-                }
-                if (matches.empty()) {
-                    // No match found; count a mismatch and output the raw segment.
-                    mismatch++;
-                    accumulatedText += tarSegment + "\n";
-                    std::cout << "No local match found at target pos " << sot 
-                              << ", mismatch count = " << mismatch << "\n";
-                    sot += sub_length;
-                    eot = sot + sub_length;
-                    sor += sub_length;
-                    eor = sor + sub_length;
-                    // Fallback if mismatches exceed threshold.
-                    if (mismatch > T2) {
-                        fallbackGlobal = true;
-                        std::cout << "Too many mismatches (" << mismatch 
-                                  << "), falling back to global matching.\n";
-                        break;
-                    }
-                    continue;
-                }
-                // Merge found positions.
-                Position mergedPos = format_matches(matches);
-                accumulatedText += std::to_string(mergedPos.start_reference) + "," +
-                                   std::to_string(mergedPos.end_reference) + "\n";
-                std::cout << "Local match: target [" << sot << "," << mergedPos.end_target 
-                          << "] mapped to reference [" << mergedPos.start_reference 
-                          << "," << mergedPos.end_reference << "]\n";
-                sot += (mergedPos.end_target + 1);
-                eot = sot + sub_length;
-                sor += (mergedPos.end_reference + 1);
-                eor = sor + sub_length;
-            }
-            writeTextToFile(interimFile, accumulatedText, true);
         }
         
-        // Global Matching Phase fallback.
-        if (fallbackGlobal || accumulatedText.empty()) {
-            std::cout << "Using global matching.\n";
-            // Clear or recreate the interim file.
-            {
-                std::ofstream temp(interimFile, std::ios::trunc);
-                if (!temp.is_open()) {
-                    throw std::runtime_error("Could not recreate interim file: " + interimFile);
+        // Use string_view to extract k-mer from target (avoiding allocation).
+        string_view kmer_prime(&St[index], k);
+        
+        if (H.find(kmer_prime) == H.end()) {
+            // Instead of using substr to extract one character, use push_back.
+            currentMismatch.mismatch.push_back(St[index]);
+            index++;  // Increment index by 1.
+            continue;
+        } else {
+            if (global) {
+                bool candidateInRange = false;
+                // Check if any candidate is within range.
+                for (int p : H[kmer_prime]) {
+                    if (prev_match_end == -1 || abs(p - prev_match_end) <= m) {
+                        candidateInRange = true;
+                        break;
+                    }
                 }
-            }
-            std::string globalText;
-            auto globalMatches = Gmatch(refSeq, tarSeq, kmer_length);
-            if (globalMatches.empty()) {
-                std::cout << "Global matching did not find any matches. Output raw target.\n";
-                globalText = tarSeq;
+                if (!candidateInRange) {
+                    currentMismatch.mismatch.push_back(St[index]);
+                    index++;
+                    continue;
+                }
+                if (!currentMismatch.mismatch.empty()) {
+                    results.push_back(currentMismatch);
+                    currentMismatch.mismatch.clear();
+                    currentMismatch.mismatch.reserve(L - index);
+                }
             } else {
-                for (const auto &pos : globalMatches) {
-                    globalText += std::to_string(pos.start_reference) + "," +
-                                  std::to_string(pos.end_reference) + "\n";
-                    std::cout << "Global match: reference [" << pos.start_reference << "," 
-                              << pos.end_reference << "]\n";
+                if (!currentMismatch.mismatch.empty()) {
+                    results.push_back(currentMismatch);
+                    currentMismatch.mismatch.clear();
+                    currentMismatch.mismatch.reserve(L - index);
                 }
             }
-            writeTextToFile(interimFile, globalText, true);
+            
+            // 9. Candidate selection.
+            int lmax1 = 0, lmax2 = 0;
+            int pn1 = 0, pn2 = 0;
+            int ln1 = 0, ln2 = 0;
+            for (int p : H[kmer_prime]) {
+                int l = extend_alignment(Sr, St, p, index, k);
+                if (global && (prev_match_end == -1 || abs(p - prev_match_end) <= m)) {
+                    if (l == lmax2) {
+                        if (pn2 == 0 || abs(p - prev_match_end) < abs(pn2 - prev_match_end))
+                            pn2 = p;
+                    } else if (l > lmax2) {
+                        lmax2 = l; pn2 = p; ln2 = l;
+                    }
+                }
+                if (l == lmax1) {
+                    if (pn1 == 0 || abs(p - prev_match_end) < abs(pn1 - prev_match_end))
+                        pn1 = p;
+                } else if (l > lmax1) {
+                    lmax1 = l; pn1 = p; ln1 = l;
+                }
+            }
+            
+            // 29-31: Choose final candidate.
+            int final_p, final_l;
+            if (global && pn2 != 0) {
+                final_p = pn2; final_l = ln2;
+            } else {
+                final_p = pn1; final_l = ln1;
+            }
+            
+            // Update previous match end.
+            prev_match_end = final_p + final_l - 1;
+            
+            // 32. Record the match.
+            Position matchRes;
+            matchRes.start_reference = final_p;
+            matchRes.length = final_l;
+            matchRes.mismatch = "";
+            results.push_back(matchRes);
+            
+            // 33. Update index.
+            index += final_l;
         }
+    }
+    
+    // Append any remaining characters (using append overload avoids temporary substring).
+    if (index < L)
+        currentMismatch.mismatch.append(St, index, string::npos);
+    if (!currentMismatch.mismatch.empty())
+        results.push_back(currentMismatch);
+    
+    cout << "DEBUG: match_sequences() finished with " << results.size() << " results.\n";
+    return results;
+}
 
-        // Postprocess interim file into final file.
-        postprocessPositions(interimFile, finalFile);
-        std::cout << "Compression complete. Final file is located at " << finalFile << "\n";
-        // Clean up temporary file.
-        std::remove(interimFile.c_str());
+void read_genomes_from_files(const string& reference_file, const string& target_file, string& reference_genome, string& target_genome) {
+    // Ucitavanje genoma iz datoteka.
+    cout << "DEBUG: read_genomes_from_files() started.\n";
+    ifstream ref_stream(reference_file);
+    if (!ref_stream.is_open()) {
+        cerr << "Error opening reference file: " << reference_file << "\n";
+        exit(1);
     }
 
-    // Merges a vector of Position objects.
-    Position format_matches(const std::vector<Position>& matches) {
-        Position merged;
-        if (matches.empty()) return merged;
-        merged.start_reference = matches[0].start_reference;
-        merged.end_reference = matches[0].end_reference;
-        merged.start_target = matches[0].start_target;
-        merged.end_target = matches[0].end_target;
-        for (size_t i = 1; i < matches.size(); ++i) {
-            merged.start_reference = std::min(merged.start_reference, matches[i].start_reference);
-            merged.end_reference = std::max(merged.end_reference, matches[i].end_reference);
-            merged.start_target = std::min(merged.start_target, matches[i].start_target);
-            merged.end_target = std::max(merged.end_target, matches[i].end_target);
+    // Obrisi linije koje pocinju s '>' (header linije).
+    string line;
+    while (getline(ref_stream, line)) {
+        if (line.empty() || line[0] == '>') {
+            continue; // Preskoci header linije.
         }
-        return merged;
+        reference_genome += line; // Dodaj liniju u referentni genom.
     }
-};
-  
+    ref_stream.close();
+    
+    // Obrisi znakove novog reda (i ostale praznine ako postoje).
+    reference_genome.erase(remove_if(reference_genome.begin(), reference_genome.end(), ::isspace), reference_genome.end());
+
+    ifstream target_stream(target_file);
+    if (!target_stream.is_open()) {
+        cerr << "Error opening target file: " << target_file << "\n";
+        exit(1);
+    }
+
+    while (getline(target_stream, line)) {
+        if (line.empty() || line[0] == '>') {
+            continue; // Preskoci header linije.
+        }
+        target_genome += line; // Dodaj liniju u target genom.
+    }
+    target_stream.close();
+
+    // Obrisi znakove novog reda (i ostale praznine ako postoje).
+    target_genome.erase(remove_if(target_genome.begin(), target_genome.end(), ::isspace), target_genome.end());
+    cout << "DEBUG: Completed reading genomes.\n";
+}
+
+void delta_encode(string file_path) {
+    // Izmijeni pozicije iz datoteke na nacin da se koristi delta enkodiranje.
+    // Svaka pocetna pozicija (osim prve) je zabiljezena kao razlika od prethodne.
+    ifstream file(file_path);
+    if (!file.is_open()) {
+        cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
+        exit(1);
+    }
+    stringstream buffer;
+    buffer << file.rdbuf();
+    string temp_file = buffer.str();
+    file.close();
+
+    int previous_start_ref = 0;
+
+    // TODO: provjeriti radi li dobro.
+    for (int i = 1; i < temp_file.size(); ++i) {
+        if (temp_file[i] == '(') {
+            size_t start_pos = i + 1;
+            size_t end_pos = temp_file.find(')', start_pos);
+            string position = temp_file.substr(start_pos, end_pos - start_pos);
+            size_t comma_pos = position.find(',');
+            int start_ref = stoi(position.substr(0, comma_pos));
+            int length = stoi(position.substr(comma_pos + 1));
+            // Delta enkodiranje.
+            if (i > 0) {
+                start_ref -= previous_start_ref;
+            }
+            previous_start_ref = start_ref;
+            temp_file.replace(start_pos, end_pos - start_pos + 1, to_string(start_ref) + "," + to_string(length));
+        }
+    }
+
+    // Spremi izmijenjeni sadrzaj u datoteku.
+    ofstream out_file(file_path, ofstream::out | ofstream::trunc);
+    if (!out_file.is_open()) {
+        cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
+        exit(1);
+    }
+    out_file << temp_file;
+    out_file.close();
+    cout << "DEBUG: delta_encode() finished.\n";
+}
+
+void compress_genome_7z(const string& input_file, const string& output_file) {
+    cout << "DEBUG: compress_genome() using 7z started.\n";
+    // Komprimiraj datoteku (7-zip-om, kao u radu).
+    string command = "7z a -mx=9 " + output_file + ".7z " + input_file;
+    int result = system(command.c_str());
+
+    if (result != 0) {
+        cerr << "Greska prilikom komprimiranja datoteke 7-zipom: " << result << " !\n";
+        exit(1);
+    } else {
+        cout << "Datoteka uspjesno komprimirana: " << output_file << ".7z !\n";
+    }
+    cout << "DEBUG: compress_genome() using 7z finished.\n";
+}
+
+void compress_genome(const string& reference_file, const string& target_file, const string& output_folder) {
+    cout << "DEBUG: compress_genome() (reference/target) started.\n";
+    // Algoritam 2 iz rada.
+    string reference_genome;
+    string target_genome;
+
+    read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
+    
+    string temp_file_path = output_folder + "/compressed_genome.txt";
+    string output_file_path = output_folder + "/compressed_genome.txt";
+
+    // Stvaranje privremene datoteke za spremanje rezultata.
+    cout << "DEBUG: Creating output folder if necessary.\n";
+    filesystem::create_directories(output_folder);
+    ofstream temp_file(temp_file_path, ofstream::out | ofstream::trunc);
+
+    // Prebaci sve znakove u velika slova i zapamti indekse malih slova u temp_file
+    cout << "DEBUG: Writing lowercase indices from reference_genome.\n";
+    for (int i = 0; i < reference_genome.length(); ++i) {
+        if (islower(reference_genome[i])) {
+            temp_file << i << ",";
+        }
+    }
+    temp_file << "\n";
+    transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
+    transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
+
+    // Pocetni parametri algoritma:
+    int k = 14;  // primarna duljina k-mera
+    int k2 = 10;  // sekundarna duljina k-mera
+    int L = 1000;  // duljina segmenta
+    int m = 100;  // udaljenost pretrazivanja preklapanja kod globalnog poravnanja
+    float T1 = 0.5;  // prag za odredivanje kvalitete preklapanja;
+    int T2 = 4;  // koliko segmenata zaredom morea biti lose kvalitete
+    bool local = true;  // lokalno poravnanje
+
+    // Dijeljenje reference_genome i target_genome na segmente duljine L.
+    vector<string> reference_segments;
+    vector<string> target_segments;
+
+    for (size_t i = 0; i < reference_genome.length(); i += L) {
+        reference_segments.push_back(reference_genome.substr(i, L));
+    }
+    for (size_t i = 0; i < target_genome.length(); i += L) {
+        target_segments.push_back(target_genome.substr(i, L));
+    }
+
+    int num_iterations = min(reference_segments.size(), target_segments.size());
+    cout << "DEBUG: Starting segment comparisons for " << num_iterations << " iterations.\n";
+    int mismatch = 0;
+    for (int i = 0; i < num_iterations; ++i) {
+        cout << "DEBUG: Processing segment " << i << "\n";
+        string r_i = reference_segments[i];
+        string t_i = target_segments[i];
+
+        // Lokalno poravnanje (prvi prolaz, s duljinom kmera k).
+        vector<Position> positions = match_sequences(r_i, t_i, k, 0, false);
+        if (positions.size() == 1 && positions[0].mismatch == "" || positions.size() > 1) {
+            // Poravnanje je uspjesno.
+            int count_mismatches = 0;
+            int total_length = 0;
+            for (Position pos : positions) {
+                if (pos.mismatch == "") {
+                    temp_file << "(" << pos.start_reference << "," << pos.length << ")";
+                    total_length += pos.length;
+                }
+                else {
+                    temp_file << pos.mismatch;
+                    count_mismatches += pos.mismatch.length();
+                }
+            }
+            // Provjeri kvalitetu poravnanja
+            float mismatch_ratio = (float)count_mismatches / t_i.length();
+            cout << "DEBUG: Local alignment mismatch ratio: " << mismatch_ratio << "\n";
+            if (mismatch_ratio > T1 && t_i.find_first_not_of('N') != string::npos) {
+                mismatch++;
+                continue;
+            }
+            mismatch = 0;
+            continue;
+        }
+
+        // Lokalno poravnanje (drugi prolaz, s duljinom k-mera k').
+        positions = match_sequences(r_i, t_i, k2, 0, false);
+        if (positions.size() == 1 && positions[0].mismatch == "" || positions.size() > 1) {
+            // Poravnanje je uspjesno.
+            int count_mismatches = 0;
+            int total_length = 0;
+            for (Position pos : positions) {
+                if (pos.mismatch == "") {
+                    temp_file << "(" << pos.start_reference << "," << pos.length << ")";
+                    total_length += pos.length;
+                }
+                else {
+                    temp_file << pos.mismatch;
+                    count_mismatches += pos.mismatch.length();
+                }
+            }
+            // Provjeri kvalitetu poravnanja
+            float mismatch_ratio = (float)count_mismatches / t_i.length();
+            cout << "DEBUG: Second pass mismatch ratio: " << mismatch_ratio << "\n";            
+            if (mismatch_ratio > T1  && t_i.find_first_not_of('N') != string::npos) {
+                mismatch++;
+                continue;
+            }
+            mismatch = 0;
+            continue;
+        }
+
+        if (t_i.find_first_not_of('N') != string::npos) {
+            // Ako je poravnanje neuspjesno, povecaj broj neuspjesnih pokusaja.
+            mismatch++;
+        } else {
+            // Ako je cijeli segment N, resetiraj broj neuspjesnih pokusaja.
+            mismatch = 0;
+        }
+
+        if (mismatch > T2) {
+            // Broj neuspjeha je prevelik, zaustavlja se lokalno poravanje i pocinje globalno
+            cout << "DEBUG: Mismatch threshold exceeded. Switching to global alignment.\n";
+            cout << "Lokalno poravnanje neuspjesno, zapocinje globalno!\n";
+
+            // Obrisi prethodni sadrzaj temp_file.
+            temp_file.close();
+            temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
+            temp_file.close();
+            
+            local = false;
+            break;
+        }
+    }
+
+    // Ako lokalno poravnanje nije uspjelo
+    if (!local) {
+        reference_genome.clear();
+        target_genome.clear();
+        read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
+
+        temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
+        // Prebaci sve znakove u velika slova i zapamti indekse malih slova u temp_file
+        temp_file << "lower: ";
+        for (int i = 0; i < target_genome.length(); ++i) {
+            if (islower(target_genome[i])) {
+                temp_file << i << ",";
+            }
+        }
+        temp_file << "\n";
+        transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
+        transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
+
+        // Obrisi sve N znakove u target_genome, zapamti njihove indekse u temp_file.
+        temp_file << "N: ";
+        for (size_t i = 0; i < target_genome.length(); ++i) {
+            if (target_genome[i] == 'N') {
+                temp_file << i << ",";
+            }
+        }
+        temp_file << "\n";
+        target_genome.erase(remove(target_genome.begin(), target_genome.end(), 'N'), target_genome.end());
+
+        // Globalno poravnanje (s duljinom k-mera k).
+        vector<Position> positions = match_sequences(reference_genome, target_genome, k, m, true);
+
+        // Spremi rezultate u temp_file.
+        for (Position pos : positions) {
+            //cout << " (" << pos.start_reference << ", " << pos.length << ")\n";
+            //cout << pos.mismatch;
+            //cout << "\n\n";
+            if (pos.mismatch == "") {
+                temp_file << "(" << pos.start_reference << "," << pos.length << ")";
+            } else {
+                temp_file <<  pos.mismatch;
+            }
+        }
+    }
+
+    temp_file.close();
+
+    // Delta kodiranje rezultata.
+    // delta_encode(temp_file_path);
+    cout << "DEBUG: delta_encode() started.\n";
+
+    compress_genome_7z(temp_file_path, output_file_path);
+    cout << "DEBUG: compress_genome() (reference/target) finished.\n";
+} 
+
 // Main function.
 int main(int argc, char* argv[]) {
+    cout << "DEBUG: main() started.\n";
+    cout << "Received " << argc << " arguments.\n";
     if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <reference_file> <target_file> <output_folder>\n";
+        cerr << "Usage: " << argv[0] << " <reference_file> <target_file> <output_folder>\n";
         return 1;
     }
     try {
         // Ensure output folder exists.
-        if (!std::filesystem::exists(argv[3])) {
-            std::filesystem::create_directory(argv[3]);
+        if (!filesystem::exists(argv[3])) {
+            filesystem::create_directory(argv[3]);
         }
-        Encoder encoder;
-        encoder.compress_genome(argv[1], argv[2], argv[3]);
+        cout << "Successfully created output folder: " << argv[3] << "\n";
+
+        compress_genome(argv[1], argv[2], argv[3]);
+
     } catch (const std::exception& ex) {
-        std::cerr << "Error: " << ex.what() << "\n";
+        cerr << "Error: " << ex.what() << "\n";
         return 1;
     }
+    cout << "DEBUG: main() finished successfully.\n";
     return 0;
 }

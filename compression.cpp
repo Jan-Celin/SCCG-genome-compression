@@ -431,7 +431,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
     // delta_encode(temp_file_path);
     cout << "DEBUG: delta_encode() started.\n";
 
-    compress_genome(temp_file_path, output_file_path);
+    compress_genome_7z(temp_file_path, output_file_path);
     cout << "DEBUG: compress_genome() (reference/target) finished.\n";
 } 
 

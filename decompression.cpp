@@ -79,18 +79,25 @@ void decompress_genome(string compressed_file_path,
             cerr << "Error reading lowercase indices line from: " << decompressed_file_path << "\n";
             exit(1);
         }
+        if (!getline(decompressed_file, n_indices_line)) {
+            cerr << "Error reading n_indices line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
+        if (!getline(decompressed_file, encoded_genome_line)) {
+            cerr << "Error reading encoded genome line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
     } else {
         // No header present; first line is the lowercase indices.
         lowercase_indices_line = first_line;
-    }
-    
-    if (!getline(decompressed_file, n_indices_line)) {
-        cerr << "Error reading n_indices line from: " << decompressed_file_path << "\n";
-        exit(1);
-    }
-    if (!getline(decompressed_file, encoded_genome_line)) {
-        cerr << "Error reading encoded genome line from: " << decompressed_file_path << "\n";
-        exit(1);
+        if (!getline(decompressed_file, n_indices_line)) {
+            cerr << "Error reading n_indices line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
+        if (!getline(decompressed_file, encoded_genome_line)) {
+            cerr << "Error reading encoded genome line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
     }
 
     lowercase_indices = lowercase_indices_line;
@@ -99,8 +106,7 @@ void decompress_genome(string compressed_file_path,
 
     decompressed_file.close();
 
-    // Further processing on the reference genome (if there is only "," in n_indices_line, 
-    // local matching was used and 'N's should not be removed from reference genome).
+    // Further processing on the reference genome:
     if(n_indices_line == ",") {
         n_indices_line = "";
     } else {

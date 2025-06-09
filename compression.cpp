@@ -178,26 +178,23 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     return results;
 }
 
-void read_genomes_from_files(const string& reference_file, const string& target_file, string& reference_genome, string& target_genome) {
-    // Ucitavanje genoma iz datoteka.
+void read_genomes_from_files(const string& reference_file, 
+                             const string& target_file, 
+                             string& reference_genome, 
+                             string& target_genome,
+                             string& target_header) {
     cout << "DEBUG: read_genomes_from_files() started.\n";
     ifstream ref_stream(reference_file);
     if (!ref_stream.is_open()) {
         cerr << "Error opening reference file: " << reference_file << "\n";
         exit(1);
     }
-
-    // Obrisi linije koje pocinju s '>' (header linije).
     string line;
     while (getline(ref_stream, line)) {
-        if (line.empty() || line[0] == '>') {
-            continue; // Preskoci header linije.
-        }
-        reference_genome += line; // Dodaj liniju u referentni genom.
+        if (line.empty() || line[0]=='>') continue;
+        reference_genome += line;
     }
     ref_stream.close();
-    
-    // Obrisi znakove novog reda (i ostale praznine ako postoje).
     reference_genome.erase(remove_if(reference_genome.begin(), reference_genome.end(), ::isspace), reference_genome.end());
 
     ifstream target_stream(target_file);
@@ -205,16 +202,18 @@ void read_genomes_from_files(const string& reference_file, const string& target_
         cerr << "Error opening target file: " << target_file << "\n";
         exit(1);
     }
-
+    bool headerFound = false;
     while (getline(target_stream, line)) {
-        if (line.empty() || line[0] == '>') {
-            continue; // Preskoci header linije.
+        if (line.empty()) continue;
+        if (!headerFound && line[0] == '>') {
+            target_header = line;
+            headerFound = true;
+        } else {
+            // Append non-header lines.
+            target_genome += line;
         }
-        target_genome += line; // Dodaj liniju u target genom.
     }
     target_stream.close();
-
-    // Obrisi znakove novog reda (i ostale praznine ako postoje).
     target_genome.erase(remove_if(target_genome.begin(), target_genome.end(), ::isspace), target_genome.end());
     cout << "DEBUG: Completed reading genomes.\n";
 }
@@ -311,25 +310,29 @@ void compress_genome_7z(const string& input_file, const string& output_file) {
     cout << "DEBUG: compress_genome() (reference/target) finished.\n";
 }
 
-void compress_genome(const string& reference_file, const string& target_file, const string& output_folder) {
+void compress_genome(const string& reference_file, 
+                     const string& target_file, 
+                     const string& output_folder) {
     cout << "DEBUG: compress_genome() (reference/target) started.\n";
     // Algoritam 2 iz rada.
     string reference_genome;
     string target_genome;
+    string target_header;
 
-    read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
-    
+    read_genomes_from_files(reference_file, target_file, reference_genome, target_genome, target_header);
+
     string temp_file_path = output_folder + "/compressed_genome.txt";
     string output_file_path = output_folder + "/compressed_genome.txt";
 
-    // Stvaranje privremene datoteke za spremanje rezultata.
     cout << "DEBUG: Creating output folder if necessary.\n";
     filesystem::create_directories(output_folder);
     ofstream temp_file(temp_file_path, ofstream::out | ofstream::trunc);
 
-    // Record contiguous lowercase indices as delta values (for single characters)
-    // or as (delta, length) tuples for runs longer than one.
-    //temp_file << "lower: ";
+    // Write the target file header as first line.
+    if (!target_header.empty()) {
+        temp_file << target_header << "\n";
+    }
+    
     int previous_lower_start = 0;
     int lower_start = -1;
     int lower_len = 0;
@@ -349,7 +352,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
                 lower_len = 0;
             }
         }
-    }
+    } 
     if (lower_len != 0) {
         int delta = lower_start - previous_lower_start;
         if (lower_len == 1)
@@ -357,7 +360,8 @@ void compress_genome(const string& reference_file, const string& target_file, co
         else
             temp_file << "(" << delta << "," << lower_len << ")";
     }
-    temp_file << "\n\n";
+    temp_file << "\n,\n";
+
     transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
     transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
 
@@ -477,9 +481,15 @@ void compress_genome(const string& reference_file, const string& target_file, co
     if (!local) {
         reference_genome.clear();
         target_genome.clear();
-        read_genomes_from_files(reference_file, target_file, reference_genome, target_genome);
+        read_genomes_from_files(reference_file, target_file, reference_genome, target_genome, target_header);
 
         temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
+        
+        // Write the target file header as first line.
+        if (!target_header.empty()) {
+            temp_file << target_header << "\n";
+        }
+
         // Record contiguous lowercase indices as delta values (for single characters)
         // or as (delta, length) tuples for runs longer than one.
         //temp_file << "lower: ";

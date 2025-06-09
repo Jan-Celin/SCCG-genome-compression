@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <unordered_map>
 #include <string_view>
+#include <chrono>
 
 using namespace std;
 
@@ -202,48 +203,66 @@ void read_genomes_from_files(const string& reference_file, const string& target_
     cout << "DEBUG: Completed reading genomes.\n";
 }
 
-void delta_encode(string file_path) {
-    // Izmijeni pozicije iz datoteke na nacin da se koristi delta enkodiranje.
-    // Svaka pocetna pozicija (osim prve) je zabiljezena kao razlika od prethodne.
+void delta_encode(const string& file_path) {
     ifstream file(file_path);
     if (!file.is_open()) {
-        cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
-        exit(1);
+        cerr << "Error opening file: " << file_path << "\n";
+        return;
     }
+
     stringstream buffer;
     buffer << file.rdbuf();
-    string temp_file = buffer.str();
+    string content = buffer.str();
     file.close();
 
+    string result_content;
+    size_t last_pos = 0;
     int previous_start_ref = 0;
 
-    // TODO: provjeriti radi li dobro.
-    for (int i = 1; i < temp_file.size(); ++i) {
-        if (temp_file[i] == '(') {
-            size_t start_pos = i + 1;
-            size_t end_pos = temp_file.find(')', start_pos);
-            string position = temp_file.substr(start_pos, end_pos - start_pos);
-            size_t comma_pos = position.find(',');
-            int start_ref = stoi(position.substr(0, comma_pos));
-            int length = stoi(position.substr(comma_pos + 1));
-            // Delta enkodiranje.
-            if (i > 0) {
-                start_ref -= previous_start_ref;
-            }
-            previous_start_ref = start_ref;
-            temp_file.replace(start_pos, end_pos - start_pos + 1, to_string(start_ref) + "," + to_string(length));
+    // Pronadi sve intervale referentnog genoma
+    size_t start_pos = content.find('(');
+    while (start_pos != string::npos) {
+        result_content += content.substr(last_pos, start_pos - last_pos);
+
+        size_t end_pos = content.find(')', start_pos);
+        if (end_pos == string::npos) {
+            result_content += content.substr(start_pos);
+            break;
         }
+
+        string position_str = content.substr(start_pos + 1, end_pos - start_pos - 1);
+        size_t comma_pos = position_str.find(',');
+        if (comma_pos == string::npos) {
+            result_content += content.substr(start_pos, end_pos - start_pos + 1);
+            last_pos = end_pos + 1;
+            start_pos = content.find('(', last_pos);
+            continue;
+        }
+
+        int start_ref = stoi(position_str.substr(0, comma_pos));
+        int length = stoi(position_str.substr(comma_pos + 1));
+        
+        int original_start_ref = start_ref;
+        int encoded_start_ref = start_ref - previous_start_ref;
+
+        result_content += "(" + to_string(encoded_start_ref) + "," + to_string(length) + ")";
+
+        previous_start_ref = original_start_ref;
+        last_pos = end_pos + 1;
+        start_pos = content.find('(', last_pos);
     }
 
-    // Spremi izmijenjeni sadrzaj u datoteku.
-    ofstream out_file(file_path, ofstream::out | ofstream::trunc);
-    if (!out_file.is_open()) {
-        cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
-        exit(1);
+    if (last_pos < content.length()) {
+        result_content += content.substr(last_pos);
     }
-    out_file << temp_file;
-    out_file.close();
-    cout << "DEBUG: delta_encode() finished.\n";
+
+    ofstream outfile(file_path, ios::trunc);
+    if (!outfile.is_open()) {
+        cerr << "Error writing back to file: " << file_path << "\n";
+        return;
+    }
+    outfile << result_content;
+    outfile.close();
 }
 
 void compress_genome_7z(const string& input_file, const string& output_file) {
@@ -440,7 +459,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
     temp_file.close();
 
     // Delta kodiranje rezultata.
-    // delta_encode(temp_file_path);
+    delta_encode(temp_file_path);
     cout << "DEBUG: delta_encode() started.\n";
 
     compress_genome_7z(temp_file_path, output_file_path);
@@ -461,8 +480,13 @@ int main(int argc, char* argv[]) {
             filesystem::create_directory(argv[3]);
         }
         cout << "Successfully created output folder: " << argv[3] << "\n";
-
+        cout << "Starting compression.";
+        auto poc = chrono::high_resolution_clock::now();
         compress_genome(argv[1], argv[2], argv[3]);
+        auto kraj = chrono::high_resolution_clock::now();
+
+        chrono::duration<double> time = end - start;
+        cout << "Time taken to compress: " << time.count() << " s\n";
 
     } catch (const std::exception& ex) {
         cerr << "Error: " << ex.what() << "\n";

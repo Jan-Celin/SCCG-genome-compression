@@ -65,7 +65,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
         if (global) {
             int progress = (index * 100) / (L - k + 1);
             if (progress >= lastPrintedProgress + 2) {
-                cout << "Progress: " << progress << "%\n";
+                cout << "Progress1: " << progress << "%\n";
                 lastPrintedProgress = progress;
             }
         }
@@ -137,9 +137,9 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
             }
 
             if (global) {
-                int progress = ((final_p+final_l) * 100) / (L);
+                int progress = ((index+final_l) * 100) / (L);
                 if (progress >= lastPrintedProgress + 2) {
-                    cout << "Progress: " << progress << "%\n";
+                    cout << "Progress2: " << progress << "%\n";
                     lastPrintedProgress = progress;
                 }
             }
@@ -169,7 +169,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     if (global) {
         int progress = ((index + currentMismatch.mismatch.size()) * 100) / (L);
         if (progress >= lastPrintedProgress + 2) {
-            cout << "Progress: " << progress << "%\n";
+            cout << "Progress3: " << progress << "%\n";
             lastPrintedProgress = progress;
         }
     }
@@ -513,6 +513,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
         }
         temp_file << "\n";
         transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
+        transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
         cout << "DEBUG: Recorded lowercase indices in temp_file.\n";
                 
         // Record contiguous 'N' characters as delta values (for single characters)
@@ -548,6 +549,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
         }
         temp_file << "\n";
         target_genome.erase(remove(target_genome.begin(), target_genome.end(), 'N'), target_genome.end());
+        reference_genome.erase(remove(reference_genome.begin(), reference_genome.end(), 'N'), reference_genome.end());
         cout << "DEBUG: Recorded 'N' characters in temp_file.\n";
 
         // Globalno poravnanje (s duljinom k-mera k).

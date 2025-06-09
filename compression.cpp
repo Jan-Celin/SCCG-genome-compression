@@ -299,8 +299,7 @@ void delta_encode(string file_path) {
 
 void compress_genome_7z(const string& input_file, const string& output_file) {
     cout << "DEBUG: compress_genome() using 7z started.\n";
-    // Komprimiraj datoteku (7-zip-om, kao u radu).
-    string command = "7z a -mx=9 " + output_file + ".7z " + input_file;
+    string command = "7z a -mx=9 \"" + output_file + ".7z\" \"" + input_file + "\"";
     int result = system(command.c_str());
 
     if (result != 0) {

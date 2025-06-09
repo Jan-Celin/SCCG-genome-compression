@@ -50,7 +50,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     int prev_match_end = -1;
     vector<Position> results;
     // Heuristic: reserve results capacity based on target length.
-    results.reserve(L / k);
+    results.reserve((L / k) * 2);
     
     Position currentMismatch;
     // Preallocate to reduce dynamic allocation overhead.
@@ -63,8 +63,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     while (index < L - k + 1) {
         // Print progress every 2% if global.
         if (global) {
-            int progress = (index * 100) / L;
-            cout << "DEBUG: Progress: " << progress << "%\n";
+            int progress = (index * 100) / (L - k + 1);
             if (progress >= lastPrintedProgress + 2) {
                 cout << "Progress: " << progress << "%\n";
                 lastPrintedProgress = progress;
@@ -136,6 +135,14 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
             } else {
                 final_p = pn1; final_l = ln1;
             }
+
+            if (global) {
+                int progress = ((final_p+final_l) * 100) / (L);
+                if (progress >= lastPrintedProgress + 2) {
+                    cout << "Progress: " << progress << "%\n";
+                    lastPrintedProgress = progress;
+                }
+            }
             
             // Update previous match end.
             prev_match_end = final_p + final_l - 1;
@@ -151,12 +158,21 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
             index += final_l;
         }
     }
+    cout << index << "/" << L << " characters processed.\n";
     
     // Append any remaining characters (using append overload avoids temporary substring).
     if (index < L)
         currentMismatch.mismatch.append(St, index, string::npos);
     if (!currentMismatch.mismatch.empty())
         results.push_back(currentMismatch);
+    
+    if (global) {
+        int progress = ((index + currentMismatch.mismatch.size()) * 100) / (L);
+        if (progress >= lastPrintedProgress + 2) {
+            cout << "Progress: " << progress << "%\n";
+            lastPrintedProgress = progress;
+        }
+    }
     
     cout << "DEBUG: match_sequences() finished with " << results.size() << " results.\n";
     return results;
@@ -204,6 +220,7 @@ void read_genomes_from_files(const string& reference_file, const string& target_
 }
 
 void delta_encode(string file_path) {
+    cout << "DEBUG: delta_encode() started for file: " << file_path << "\n";
     // Read the entire file into a string.
     ifstream file(file_path);
     if (!file.is_open()) {
@@ -214,9 +231,20 @@ void delta_encode(string file_path) {
     buffer << file.rdbuf();
     string temp_file = buffer.str();
     file.close();
-
-    int previous_start_ref = 0;
+    cout << "DEBUG: Read file of size " << temp_file.size() << " characters.\n";
+    
     size_t search_start = 0;
+    // Update search_start to be after the second newline character.
+    size_t first_newline = temp_file.find('\n');
+    if (first_newline != string::npos) {
+        size_t second_newline = temp_file.find('\n', first_newline + 1);
+        if (second_newline != string::npos) {
+            search_start = second_newline + 1;
+        }
+    }
+    
+    int previous_start_ref = 0;
+    int token_replacements = 0;
 
     // Find all tokens in the format (start_reference,length) and replace start_reference with delta.
     while (true) {
@@ -246,12 +274,17 @@ void delta_encode(string file_path) {
         // Build the new token content: replace the original number with the delta,
         // and keep the rest (from the comma onward) unchanged.
         string new_token = to_string(delta) + token.substr(comma_pos);
+        // Debug: print the token replacement info.
+        cout << "DEBUG " << token_replacements << ": Replacing token (" << token 
+             << ") with (" << new_token << ") at position " << start_pos << "\n";
         // Replace the existing token content with the new token.
         temp_file.replace(start_pos, token.size(), new_token);
+        token_replacements++;
 
-        // Move search_start to after the closing parenthesis.
-        search_start = end_pos;
+        // Move search_start to after the newly replaced token.
+        search_start = start_pos + new_token.size();
     }
+    cout << "DEBUG: Total tokens replaced: " << token_replacements << "\n";
 
     // Write the modified content back into the file.
     ofstream out_file(file_path, ofstream::out | ofstream::trunc);
@@ -261,7 +294,7 @@ void delta_encode(string file_path) {
     }
     out_file << temp_file;
     out_file.close();
-    cout << "DEBUG: delta_encode() finished.\n";
+    cout << "DEBUG: delta_encode() finished. Final file size: " << temp_file.size() << "\n";
 }
 
 void compress_genome_7z(const string& input_file, const string& output_file) {
@@ -276,7 +309,7 @@ void compress_genome_7z(const string& input_file, const string& output_file) {
     } else {
         cout << "Datoteka uspjesno komprimirana: " << output_file << ".7z !\n";
     }
-    cout << "DEBUG: compress_genome() using 7z finished.\n";
+    cout << "DEBUG: compress_genome() (reference/target) finished.\n";
 }
 
 void compress_genome(const string& reference_file, const string& target_file, const string& output_folder) {
@@ -295,14 +328,37 @@ void compress_genome(const string& reference_file, const string& target_file, co
     filesystem::create_directories(output_folder);
     ofstream temp_file(temp_file_path, ofstream::out | ofstream::trunc);
 
-    // Prebaci sve znakove u velika slova i zapamti indekse malih slova u temp_file
-    cout << "DEBUG: Writing lowercase indices from reference_genome.\n";
-    for (int i = 0; i < reference_genome.length(); ++i) {
-        if (islower(reference_genome[i])) {
-            temp_file << i << ",";
+    // Record contiguous lowercase indices as delta values (for single characters)
+    // or as (delta, length) tuples for runs longer than one.
+    //temp_file << "lower: ";
+    int previous_lower_start = 0;
+    int lower_start = -1;
+    int lower_len = 0;
+    for (int i = 0; i < target_genome.length(); ++i) {
+        if (islower(target_genome[i])) {
+            if (lower_len == 0)
+                lower_start = i; // start new segment
+            ++lower_len;
+        } else {
+            if (lower_len != 0) {
+                int delta = lower_start - previous_lower_start;
+                if (lower_len == 1)
+                    temp_file << delta << ",";
+                else
+                    temp_file << "(" << delta << "," << lower_len << ")";
+                previous_lower_start = lower_start;
+                lower_len = 0;
+            }
         }
     }
-    temp_file << "\n";
+    if (lower_len != 0) {
+        int delta = lower_start - previous_lower_start;
+        if (lower_len == 1)
+            temp_file << delta;
+        else
+            temp_file << "(" << delta << "," << lower_len << ")";
+    }
+    temp_file << "\n\n";
     transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
     transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
 
@@ -493,11 +549,9 @@ void compress_genome(const string& reference_file, const string& target_file, co
         temp_file << "\n";
         target_genome.erase(remove(target_genome.begin(), target_genome.end(), 'N'), target_genome.end());
         cout << "DEBUG: Recorded 'N' characters in temp_file.\n";
-        temp_file.close();
 
         // Globalno poravnanje (s duljinom k-mera k).
         vector<Position> positions = match_sequences(reference_genome, target_genome, k, m, true);
-        temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
 
         // Spremi rezultate u temp_file.
         for (Position pos : positions) {
@@ -516,10 +570,8 @@ void compress_genome(const string& reference_file, const string& target_file, co
 
     // Delta kodiranje rezultata.
     delta_encode(temp_file_path);
-    cout << "DEBUG: delta_encode() finished.\n";
 
     compress_genome_7z(temp_file_path, output_file_path);
-    cout << "DEBUG: compress_genome() (reference/target) finished.\n";
 } 
 
 // Main function.

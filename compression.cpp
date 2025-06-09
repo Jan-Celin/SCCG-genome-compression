@@ -456,6 +456,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
                 temp_file << "(" << delta << "," << lower_len << ")";
         }
         temp_file << "\n";
+        transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
         cout << "DEBUG: Recorded lowercase indices in temp_file.\n";
                 
         // Record contiguous 'N' characters as delta values (for single characters)
@@ -490,6 +491,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
                 temp_file << "(" << delta << "," << n_len << ")";
         }
         temp_file << "\n";
+        target_genome.erase(remove(target_genome.begin(), target_genome.end(), 'N'), target_genome.end());
         cout << "DEBUG: Recorded 'N' characters in temp_file.\n";
         temp_file.close();
 

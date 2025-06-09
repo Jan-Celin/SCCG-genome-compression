@@ -95,6 +95,7 @@ string reconstruct_genome(const string& reference_genome,
                           const string& n_indices_str,
                           const string& lowercase_indices_str) {
 
+    // Process the n_indices as before.
     vector<int> n_indices;
     stringstream n_stream(n_indices_str);
     string token;
@@ -105,30 +106,111 @@ string reconstruct_genome(const string& reference_genome,
     }
     sort(n_indices.begin(), n_indices.end());
 
-    vector<int> lowercase_indices;
-    stringstream lower_stream(lowercase_indices_str);
-    while (getline(lower_stream, token, ',')) {
-        if (!token.empty()) {
-            lowercase_indices.push_back(stoi(token));
+    // Updated processing for lowercase_indices:
+    vector<int> lowercase_positions;
+    int prev_lower = 0;
+    size_t pos = 0;
+    while (pos < lowercase_indices_str.size()) {
+        if (lowercase_indices_str[pos] == '(') {
+            // Token is in the form "(delta,length)"
+            size_t close = lowercase_indices_str.find(')', pos);
+            string tuple_token = lowercase_indices_str.substr(pos + 1, close - pos - 1);
+            size_t comma = tuple_token.find(',');
+            int delta = stoi(tuple_token.substr(0, comma));
+            int len = stoi(tuple_token.substr(comma + 1));
+            int lower_start = prev_lower + delta;
+            // Add run of lowercase positions.
+            for (int j = 0; j < len; j++) {
+                lowercase_positions.push_back(lower_start + j);
+            }
+            prev_lower = lower_start;
+            pos = close + 1;
+            // Skip a following comma if present.
+            if (pos < lowercase_indices_str.size() && lowercase_indices_str[pos] == ',')
+                pos++;
+        } else {
+            // Token is a single delta value.
+            size_t comma = lowercase_indices_str.find(',', pos);
+            string num_token;
+            if (comma == string::npos) {
+                num_token = lowercase_indices_str.substr(pos);
+                pos = lowercase_indices_str.size();
+            } else {
+                num_token = lowercase_indices_str.substr(pos, comma - pos);
+                pos = comma + 1;
+            }
+            if (!num_token.empty()) {
+                int delta = stoi(num_token);
+                int lower_start = prev_lower + delta;
+                lowercase_positions.push_back(lower_start);
+                prev_lower = lower_start;
+            }
         }
     }
-    sort(lowercase_indices.begin(), lowercase_indices.end());
+    sort(lowercase_positions.begin(), lowercase_positions.end());
+
+    // Updated processing for N indices
+    vector<int> n_positions;
+    int prev_n = 0;
+    size_t pos_n = 0;
+    while (pos_n < n_indices_str.size()) {
+        if (n_indices_str[pos_n] == '(') {
+            // Token is in the form "(delta,length)"
+            size_t close = n_indices_str.find(')', pos_n);
+            string tuple_token = n_indices_str.substr(pos_n + 1, close - pos_n - 1);
+            size_t comma = tuple_token.find(',');
+            int delta = stoi(tuple_token.substr(0, comma));
+            int len = stoi(tuple_token.substr(comma + 1));
+            int n_start = prev_n + delta;
+            // Add run of N positions.
+            for (int j = 0; j < len; j++) {
+                n_positions.push_back(n_start + j);
+            }
+            prev_n = n_start;
+            pos_n = close + 1;
+            // Skip a following comma, if present.
+            if (pos_n < n_indices_str.size() && n_indices_str[pos_n] == ',')
+                pos_n++;
+        } else {
+            // Token is a single delta value.
+            size_t comma = n_indices_str.find(',', pos_n);
+            string num_token;
+            if (comma == string::npos) {
+                num_token = n_indices_str.substr(pos_n);
+                pos_n = n_indices_str.size();
+            } else {
+                num_token = n_indices_str.substr(pos_n, comma - pos_n);
+                pos_n = comma + 1;
+            }
+            if (!num_token.empty()) {
+                int delta = stoi(num_token);
+                int n_start = prev_n + delta;
+                n_positions.push_back(n_start);
+                prev_n = n_start;
+            }
+        }
+    }
+    sort(n_positions.begin(), n_positions.end());
 
     string reconstructed_genome;
     size_t i = 0;
-    int decoded_i = 0;
+    int prev_abs_start = 0; // Holds the previous absolute start position.
     while (i < encoded_genome.size()) {
         if (encoded_genome[i] == '(') {
             size_t end_pos = encoded_genome.find(')', i);
             size_t comma_pos = encoded_genome.find(',', i);
-
-            int start = stoi(encoded_genome.substr(i + 1, comma_pos - i - 1));
+            // Read the delta value.
+            int delta = stoi(encoded_genome.substr(i + 1, comma_pos - i - 1));
+            // Read the length.
             int length = stoi(encoded_genome.substr(comma_pos + 1, end_pos - comma_pos - 1));
-
-            reconstructed_genome += reference_genome.substr(start, length);
+            // Compute the absolute start index.
+            int absolute_start = prev_abs_start + delta;
+            prev_abs_start = absolute_start;
+            // Append the substring from the reference genome.
+            reconstructed_genome += reference_genome.substr(absolute_start, length);
             i = end_pos + 1;
         } else {
-            reconstructed_genome += encoded_genome[i];
+            reconstructed_genome.push_back(encoded_genome[i]);
             ++i;
         }
     }
@@ -145,7 +227,7 @@ string reconstruct_genome(const string& reference_genome,
             result += reconstructed_genome[temp_index++];
         }
     }
-    for (int l_index : lowercase_indices) {
+    for (int l_index : lowercase_positions) {
         result[l_index] = tolower(result[l_index]);
     }
     

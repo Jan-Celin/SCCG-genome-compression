@@ -161,7 +161,6 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     }
     cout << index << "/" << L << " characters processed.\n";
     
-    // Append any remaining characters (using append overload avoids temporary substring).
     if (index < L)
         currentMismatch.mismatch.append(St, index, string::npos);
     if (!currentMismatch.mismatch.empty())
@@ -222,7 +221,7 @@ void read_genomes_from_files(const string& reference_file,
 
 void delta_encode(string file_path) {
     cout << "DEBUG: delta_encode() started for file: " << file_path << "\n";
-    // Read the entire file into a string.
+
     ifstream file(file_path);
     if (!file.is_open()) {
         cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
@@ -235,7 +234,6 @@ void delta_encode(string file_path) {
     cout << "DEBUG: Read file of size " << temp_file.size() << " characters.\n";
     
     size_t search_start = 0;
-    // If a header exists (first char is '>'), skip three lines instead of two.
     if (!temp_file.empty() && temp_file[0] == '>') {
         size_t header_end = temp_file.find('\n');
         if (header_end != string::npos) {
@@ -260,47 +258,41 @@ void delta_encode(string file_path) {
     int previous_start_ref = 0;
     int token_replacements = 0;
 
-    // Find all tokens in the format (start_reference,length) and replace start_reference with delta.
+    // Pronadi sve parove (poc,duljina) i zamijeni ih s delta kodiranim.
     while (true) {
         size_t open_pos = temp_file.find('(', search_start);
         if (open_pos == string::npos)
-            break;  // No more tokens.
+            break; 
 
         size_t start_pos = open_pos + 1;
         size_t end_pos = temp_file.find(')', start_pos);
-        if (end_pos == string::npos)
-            break;  // Malformed token; no matching ')'.
+        if (end_pos == string::npos)  // Provjera u slucaju da nema zatvorene zagrade.
+            break;
 
-        // Extract the token between the parentheses.
         string token = temp_file.substr(start_pos, end_pos - start_pos);
         size_t comma_pos = token.find(',');
         if (comma_pos == string::npos) {
-            // If no comma, skip this token.
-            search_start = end_pos + 1;
+            search_start = end_pos + 1;  // Provjera ako nema zareza
             continue;
         }
-        // Parse the original start reference.
+
         int start_ref = stoi(token.substr(0, comma_pos));
         int delta = start_ref - previous_start_ref;
-        // Update previous_start_ref with the absolute value.
+
         previous_start_ref = start_ref;
 
-        // Build the new token content: replace the original number with the delta,
-        // and keep the rest (from the comma onward) unchanged.
         string new_token = to_string(delta) + token.substr(comma_pos);
-        // Debug: print the token replacement info.
+
         cout << "DEBUG " << token_replacements << ": Replacing token (" << token 
              << ") with (" << new_token << ") at position " << start_pos << "\n";
-        // Replace the existing token content with the new token.
+
         temp_file.replace(start_pos, token.size(), new_token);
         token_replacements++;
 
-        // Move search_start to after the newly replaced token.
         search_start = start_pos + new_token.size();
     }
     cout << "DEBUG: Total tokens replaced: " << token_replacements << "\n";
 
-    // Write the modified content back into the file.
     ofstream out_file(file_path, ofstream::out | ofstream::trunc);
     if (!out_file.is_open()) {
         cerr << "Greska pri otvaranju datoteke: " << file_path << "\n";
@@ -330,9 +322,8 @@ void compress_genome(const string& reference_file, const string& target_file, co
     // Algoritam 2 iz rada.
     string reference_genome;
     string target_genome;
-    string target_header; // New variable to store header.
+    string target_header;
 
-    // Updated function call:
     read_genomes_from_files(reference_file, target_file, reference_genome, target_genome, target_header);
 
     string temp_file_path = output_folder + "/compressed_genome.txt";
@@ -343,21 +334,17 @@ void compress_genome(const string& reference_file, const string& target_file, co
     filesystem::create_directories(output_folder);
     ofstream temp_file(temp_file_path, ofstream::out | ofstream::trunc);
 
-    // Write header first, if it exists.
     if (!target_header.empty()) {
         temp_file << target_header << "\n";
     }
     
-    // Record contiguous lowercase indices as delta values (for single characters)
-    // or as (delta, length) tuples for runs longer than one.
-    //temp_file << "lower: ";
     int previous_lower_start = 0;
     int lower_start = -1;
     int lower_len = 0;
     for (int i = 0; i < target_genome.length(); ++i) {
         if (islower(target_genome[i])) {
             if (lower_len == 0)
-                lower_start = i; // start new segment
+                lower_start = i;
             ++lower_len;
         } else {
             if (lower_len != 0) {
@@ -486,7 +473,6 @@ void compress_genome(const string& reference_file, const string& target_file, co
         }
     }
 
-    // After the main for loop of segment comparisons:
     if (local && target_segments.size() > num_iterations) {
         cout << "DEBUG: Adding remaining target segments as mismatches.\n";
         for (size_t j = num_iterations; j < target_segments.size(); ++j) {
@@ -501,20 +487,18 @@ void compress_genome(const string& reference_file, const string& target_file, co
         read_genomes_from_files(reference_file, target_file, reference_genome, target_genome, target_header);
 
         temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
-        // Write header first, if it exists.
+
         if (!target_header.empty()) {
             temp_file << target_header << "\n";
         }
-        // Record contiguous lowercase indices as delta values (for single characters)
-        // or as (delta, length) tuples for runs longer than one.
-        //temp_file << "lower: ";
+
         int previous_lower_start = 0;
         int lower_start = -1;
         int lower_len = 0;
         for (int i = 0; i < target_genome.length(); ++i) {
             if (islower(target_genome[i])) {
                 if (lower_len == 0)
-                    lower_start = i; // start new segment
+                    lower_start = i;
                 ++lower_len;
             } else {
                 if (lower_len != 0) {
@@ -539,17 +523,14 @@ void compress_genome(const string& reference_file, const string& target_file, co
         transform(target_genome.begin(), target_genome.end(), target_genome.begin(), ::toupper);
         transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
         cout << "DEBUG: Recorded lowercase indices in temp_file.\n";
-                
-        // Record contiguous 'N' characters as delta values (for single characters)
-        // or as (delta, length) tuples for runs longer than one.
-        //temp_file << "N: ";
+
         int previous_n_start = 0;
         int n_start = -1;
         int n_len = 0;
         for (int i = 0; i < target_genome.length(); ++i) {
             if (target_genome[i] == 'N') {
                 if (n_start == -1)
-                    n_start = i; // start new segment
+                    n_start = i;
                 ++n_len;
             } else {
                 if (n_len != 0) {
@@ -600,7 +581,6 @@ void compress_genome(const string& reference_file, const string& target_file, co
     compress_genome_7z(temp_file_path, output_file_path);
 } 
 
-// Main function.
 int main(int argc, char* argv[]) {
     cout << "DEBUG: main() started.\n";
     cout << "Received " << argc << " arguments.\n";
@@ -609,7 +589,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     try {
-        // Ensure output folder exists.
         if (!filesystem::exists(argv[3])) {
             filesystem::create_directory(argv[3]);
         }

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <unordered_map>
 #include <string_view>
+#include <chrono>
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -23,13 +24,14 @@ void decompress_genome(string compressed_file_path,
                        string& reference_genome, 
                        string& encoded_genome,
                        string& n_indices,
-                       string& lowercase_indices) {
+                       string& lowercase_indices,
+                       string& target_header) {
     // Ensure the output folder exists
     if (!fs::exists(output_folder)) {
         fs::create_directory(output_folder);
     }
 
-    // Construct the 7z extraction command and run it
+    // Construct the 7z extraction command and run it.
     string command = "7z e \"" + compressed_file_path + "\" -o\"" + output_folder + "\" -y";
     int result = system(command.c_str());
     if (result != 0) {
@@ -44,47 +46,76 @@ void decompress_genome(string compressed_file_path,
     string decompressed_file_path = output_folder + "/" + compPath.stem().string();
     cout << "Found decompressed file: " << decompressed_file_path << "\n";
 
-    // Read the reference genome from the reference file
+    // Read the reference genome from the reference file.
     ifstream reference_file(reference_genome_path);
     if (!reference_file.is_open()) {
         cerr << "Error opening reference file: " << reference_genome_path << "\n";
         exit(1);
     }
-    
     string line;
     while (getline(reference_file, line)) {
-        // Skip header lines starting with '>'
-        if (line.empty() || line[0] == '>') {
-            continue;
-        }
+        if (line.empty() || line[0] == '>') continue; // skip header lines
         reference_genome += line;
     }
     reference_file.close();
     reference_genome.erase(remove_if(reference_genome.begin(), reference_genome.end(), ::isspace), reference_genome.end());
 
-    // Read the target genome from the decompressed file
+    // Read the target genome from the decompressed file.
     ifstream decompressed_file(decompressed_file_path);
     if (!decompressed_file.is_open()) {
         cerr << "Error opening decompressed file: " << decompressed_file_path << "\n";
         exit(1);
     }
-    
-    line = "";
-    while (getline(decompressed_file, line)) {
-        // Skip header lines starting with '>'
-        if (line.empty() || line[0] == '>') {
-            continue;
-        } else if (line.rfind("N: ", 0) == 0) {
-            n_indices = line.substr(3);
-        } else if (line.rfind("lower: ", 0) == 0) {
-            lowercase_indices = line.substr(7);
-        } else {
-            encoded_genome += line;
+
+    string first_line, lowercase_indices_line, n_indices_line, encoded_genome_line;
+    // Get first line.
+    if (!getline(decompressed_file, first_line)) {
+        cerr << "Error reading first line from: " << decompressed_file_path << "\n";
+        exit(1);
+    }
+    // If the first line starts with '>', treat it as the target header.
+    if (!first_line.empty() && first_line[0] == '>') {
+        target_header = first_line;
+        if (!getline(decompressed_file, lowercase_indices_line)) {
+            cerr << "Error reading lowercase indices line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
+        if (!getline(decompressed_file, n_indices_line)) {
+            cerr << "Error reading n_indices line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
+        if (!getline(decompressed_file, encoded_genome_line)) {
+            cerr << "Error reading encoded genome line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
+    } else {
+        // No header present; first line is the lowercase indices.
+        lowercase_indices_line = first_line;
+        if (!getline(decompressed_file, n_indices_line)) {
+            cerr << "Error reading n_indices line from: " << decompressed_file_path << "\n";
+            exit(1);
+        }
+        if (!getline(decompressed_file, encoded_genome_line)) {
+            cerr << "Error reading encoded genome line from: " << decompressed_file_path << "\n";
+            exit(1);
         }
     }
+
+    lowercase_indices = lowercase_indices_line;
+    n_indices = n_indices_line;
+    encoded_genome = encoded_genome_line;
+
     decompressed_file.close();
 
-    // (Optional) Further processing on the reference and target genomes can be done here.
+    // Further processing on the reference genome:
+    if(n_indices_line == ",") {
+        n_indices_line = "";
+    } else {
+        // Remove 'N's from the reference genome if n_indices_line is not just a comma.
+        reference_genome.erase(remove(reference_genome.begin(), reference_genome.end(), 'N'), reference_genome.end());
+    }
+    transform(reference_genome.begin(), reference_genome.end(), reference_genome.begin(), ::toupper);
+
     cout << "Reference genome loaded (" << reference_genome.size() << " characters)." << "\n";
     cout << "Target genome loaded (" << encoded_genome.size() << " characters)." << "\n";
 }
@@ -95,60 +126,168 @@ string reconstruct_genome(const string& reference_genome,
                           const string& n_indices_str,
                           const string& lowercase_indices_str) {
 
-    vector<int> n_indices;
-    stringstream n_stream(n_indices_str);
-    string token;
-    while (getline(n_stream, token, ',')) {
-        if (!token.empty()) {
-            n_indices.push_back(stoi(token));
+    cout << "DEBUG: Starting genome reconstruction" << "\n";
+    cout << "DEBUG: Reference genome size: " << reference_genome.size() << "\n";
+    cout << "DEBUG: Encoded genome size: " << encoded_genome.size() << "\n";
+
+    // Updated processing for lowercase_indices:
+    vector<int> lowercase_positions;
+    int prev_lower = 0;
+    size_t pos = 0;
+    while (pos < lowercase_indices_str.size()) {
+        if (lowercase_indices_str[pos] == '(') {
+            size_t close = lowercase_indices_str.find(')', pos);
+            string tuple_token = lowercase_indices_str.substr(pos + 1, close - pos - 1);
+            size_t comma = tuple_token.find(',');
+            int delta = stoi(tuple_token.substr(0, comma));
+            int len = stoi(tuple_token.substr(comma + 1));
+            int lower_start = prev_lower + delta;
+            //cout << "DEBUG: Parsed lowercase tuple: (" << delta << "," << len << "), lower_start: " << lower_start << "\n";
+            for (int j = 0; j < len; j++) {
+                lowercase_positions.push_back(lower_start + j);
+            }
+            prev_lower = lower_start;
+            pos = close + 1;
+            if (pos < lowercase_indices_str.size() && lowercase_indices_str[pos] == ',')
+                pos++;
+        } else {
+            size_t comma = lowercase_indices_str.find(',', pos);
+            string num_token;
+            if (comma == string::npos) {
+                num_token = lowercase_indices_str.substr(pos);
+                pos = lowercase_indices_str.size();
+            } else {
+                num_token = lowercase_indices_str.substr(pos, comma - pos);
+                pos = comma + 1;
+            }
+            if (!num_token.empty()) {
+                int delta = stoi(num_token);
+                int lower_start = prev_lower + delta;
+                //cout << "DEBUG: Parsed lowercase token: " << num_token << ", lower_start: " << lower_start << "\n";
+                lowercase_positions.push_back(lower_start);
+                prev_lower = lower_start;
+            }
         }
     }
-    sort(n_indices.begin(), n_indices.end());
+    sort(lowercase_positions.begin(), lowercase_positions.end());
 
-    vector<int> lowercase_indices;
-    stringstream lower_stream(lowercase_indices_str);
-    while (getline(lower_stream, token, ',')) {
-        if (!token.empty()) {
-            lowercase_indices.push_back(stoi(token));
+    // Updated processing for N indices (delta-encoded):
+    vector<int> n_positions;
+    int prev_n = 0;
+    size_t pos_n = 0;
+    while (pos_n < n_indices_str.size()) {
+        if (n_indices_str[pos_n] == '(') {
+            // Token is in the form "(delta,length)"
+            size_t close = n_indices_str.find(')', pos_n);
+            string tuple_token = n_indices_str.substr(pos_n + 1, close - pos_n - 1);
+            size_t comma = tuple_token.find(',');
+            int delta = stoi(tuple_token.substr(0, comma));
+            int len = stoi(tuple_token.substr(comma + 1));
+            int n_start = prev_n + delta;
+            //cout << "DEBUG: Parsed N tuple: (" << delta << "," << len << "), n_start: " << n_start << "\n";
+            for (int j = 0; j < len; j++) {
+                n_positions.push_back(n_start + j);
+            }
+            prev_n = n_start;
+            pos_n = close + 1;
+            // Skip a following comma, if present.
+            if (pos_n < n_indices_str.size() && n_indices_str[pos_n] == ',')
+                pos_n++;
+        } else {
+            // Token is a single delta value.
+            size_t comma = n_indices_str.find(',', pos_n);
+            string num_token;
+            if (comma == string::npos) {
+                num_token = n_indices_str.substr(pos_n);
+                pos_n = n_indices_str.size();
+            } else {
+                num_token = n_indices_str.substr(pos_n, comma - pos_n);
+                pos_n = comma + 1;
+            }
+            if (!num_token.empty()) {
+                int delta = stoi(num_token);
+                int n_start = prev_n + delta;
+                //cout << "DEBUG: Parsed N token: " << num_token << ", n_start: " << n_start << "\n";
+                n_positions.push_back(n_start);
+                prev_n = n_start;
+            }
         }
     }
-    sort(lowercase_indices.begin(), lowercase_indices.end());
+    sort(n_positions.begin(), n_positions.end());
 
+    // Decode the encoded genome tokens.
     string reconstructed_genome;
     size_t i = 0;
-    int decoded_i = 0;
+    int prev_abs_start = 0; // Previous absolute start position from reference.
     while (i < encoded_genome.size()) {
         if (encoded_genome[i] == '(') {
             size_t end_pos = encoded_genome.find(')', i);
             size_t comma_pos = encoded_genome.find(',', i);
-
-            int start = stoi(encoded_genome.substr(i + 1, comma_pos - i - 1));
+            // Read the delta value.
+            int delta = stoi(encoded_genome.substr(i + 1, comma_pos - i - 1));
+            // Read the length.
             int length = stoi(encoded_genome.substr(comma_pos + 1, end_pos - comma_pos - 1));
-
-            reconstructed_genome += reference_genome.substr(start, length);
+            // Compute the absolute start index.
+            int absolute_start = prev_abs_start + delta;
+            //cout << "DEBUG: Processing token (" << delta << "," << length << ") -> absolute_start: " << absolute_start << "\n";
+            prev_abs_start = absolute_start;
+            if (absolute_start + length > (int)reference_genome.size()) {
+                cerr << "ERROR: absolute_start + length (" 
+                     << absolute_start + length 
+                     << ") exceeds reference genome size (" 
+                     << reference_genome.size() << ")" << "\n";
+                exit(1);
+            }
+            reconstructed_genome += reference_genome.substr(absolute_start, length);
             i = end_pos + 1;
         } else {
-            reconstructed_genome += encoded_genome[i];
+            reconstructed_genome.push_back(encoded_genome[i]);
             ++i;
         }
     }
+    cout << "DEBUG: Reconstructed genome length after token decoding: " 
+         << reconstructed_genome.size() << "\n";
 
+    // Insert 'N's into the reconstructed genome.
     string result;
     size_t temp_index = 0;
     size_t n_pos = 0;
-
-    for (int i = 0; i < reconstructed_genome.size() + n_indices.size(); ++i) {
-        if (n_pos < n_indices.size() && n_indices[n_pos] == i) {
+    for (int i = 0; i < (int)(reconstructed_genome.size() + n_positions.size()); ++i) {
+        if (n_pos < n_positions.size() && n_positions[n_pos] == i) {
             result += 'N';
+            //cout << "DEBUG: Inserting 'N' at position: " << i << "\n";
             ++n_pos;
         } else {
             result += reconstructed_genome[temp_index++];
         }
     }
-    for (int l_index : lowercase_indices) {
-        result[l_index] = tolower(result[l_index]);
+
+    // Apply lowercase conversions.
+    for (int l_index : lowercase_positions) {
+        if (l_index < (int)result.size()) {
+            result[l_index] = tolower(result[l_index]);
+            //cout << "DEBUG: Converting position " << l_index << " to lowercase" << "\n";
+        } else {
+            cout << "WARNING: Lowercase index " << l_index << " out of bounds (" 
+                 << result.size() << ")\n";
+        }
     }
     
+    cout << "DEBUG: Final reconstructed genome length: " << result.size() << "\n";
+
+    // Every 50 characters add a newline for readability.
+    string formatted;
+    size_t chunk_size = 50;
+    for (size_t pos = 0; pos < result.size(); pos += chunk_size) {
+        formatted += result.substr(pos, chunk_size);
+        if (pos + chunk_size < result.size()) {
+            formatted += "\n";
+        }
+    }
+    result = formatted + "\n";
+
+    cout << "DEBUG: Reconstructed genome ready with " << result.size() << " characters.\n";
+
     return result;
 }
 
@@ -164,33 +303,41 @@ int main(int argc, char* argv[]) {
 
     string n_indices;
     string lowercase_indices;
+    string target_header;
 
+    cout << "Starting decompression.";
+    auto start = chrono::high_resolution_clock::now();
+    
     try {
-        decompress_genome(argv[1], argv[2], argv[3], reference_genome, encoded_genome, n_indices, lowercase_indices);
+        decompress_genome(argv[1], argv[2], argv[3], reference_genome, encoded_genome, n_indices, lowercase_indices, target_header);
     } catch (const std::exception& ex) {
         cerr << "Error: " << ex.what() << "\n";
         return 1;
     }
-
     // Reconstruct the target genome using the compressed file.
     string reconstructed_genome;
     try {
         reconstructed_genome = reconstruct_genome(reference_genome, encoded_genome, n_indices, lowercase_indices);
+        
     } catch (const exception &ex) {
         cerr << "Error during reconstruction: " << ex.what() << "\n";
         return 1;
     }
+    auto end = chrono::high_resolution_clock::now();
     
     // Write the reconstructed genome to the output file.
-    string output_file_path = string(argv[3]) + "/reconstructed_genome.txt";
+    string output_file_path = string(argv[3]) + "/reconstructed_genome.fa";
     ofstream out_file(output_file_path);
     if (!out_file.is_open()) {
         cerr << "Error opening output file: " << argv[3] << "\n";
         return 1;
     }
-    out_file << reconstructed_genome;
+    out_file << target_header << "\n" << reconstructed_genome;
     out_file.close();
     cout << "Reconstructed genome written (" << reconstructed_genome.size() << " characters) to: " << argv[3] << "\n";
+
+    chrono::duration<double> time = end - start;
+    cout << "Time taken to decompress: " << time.count() << " s\n";
     
     return 0;
 }

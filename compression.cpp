@@ -25,14 +25,14 @@ struct Position {
 // Inline to encourage inlining in performance-critical code
 inline int extend_alignment(const string& Sr, const string& St, int p, int index, int k) {
     int l = k; // starting with k characters that are known to match
-    while (p + l + 1 < (int)Sr.size() && index + l + 1 < (int)St.size() &&
-           Sr[p + l + 1] == St[index + l + 1]) {
+    while (p + l < (int)Sr.size() && index + l < (int)St.size() &&
+           Sr[p + l] == St[index + l]) {
         ++l;
     }
     return l;
 }
 
-vector<Position> match_sequences(const string& Sr, const string& St, int k, int m, bool global, int ind = 0) {
+vector<Position> match_sequences(const string& Sr, const string& St, int k, int m, bool global, int offset = 0) {
     // 1. Get length of target.
     int L = St.size();
     
@@ -46,7 +46,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
     }
     
     // 3. Initialize variables.
-    int index = ind;
+    int index = 0;
     int prev_match_end = -1;
     vector<Position> results;
     // Heuristic: reserve results capacity based on target length.
@@ -64,6 +64,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
         // Print progress every 2% if global.
         if (global) {
             int progress = (index * 100) / L;
+            cout << "DEBUG: Progress: " << progress << "%\n";
             if (progress >= lastPrintedProgress + 2) {
                 cout << "Progress: " << progress << "%\n";
                 lastPrintedProgress = progress;
@@ -141,7 +142,7 @@ vector<Position> match_sequences(const string& Sr, const string& St, int k, int 
             
             // 32. Record the match.
             Position matchRes;
-            matchRes.start_reference = final_p;
+            matchRes.start_reference = final_p + offset; // Adjust for local subset offset.
             matchRes.length = final_l;
             matchRes.mismatch = "";
             results.push_back(matchRes);
@@ -426,12 +427,12 @@ void compress_genome(const string& reference_file, const string& target_file, co
         temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
         // Record contiguous lowercase indices as delta values (for single characters)
         // or as (delta, length) tuples for runs longer than one.
-        temp_file << "lower: ";
+        //temp_file << "lower: ";
         int previous_lower_start = 0;
         int lower_start = -1;
         int lower_len = 0;
-        for (int i = 0; i < reference_genome.length(); ++i) {
-            if (islower(reference_genome[i])) {
+        for (int i = 0; i < target_genome.length(); ++i) {
+            if (islower(target_genome[i])) {
                 if (lower_len == 0)
                     lower_start = i; // start new segment
                 ++lower_len;
@@ -441,7 +442,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
                     if (lower_len == 1)
                         temp_file << delta << ",";
                     else
-                        temp_file << "(" << delta << "," << lower_len << "),";
+                        temp_file << "(" << delta << "," << lower_len << ")";
                     previous_lower_start = lower_start;
                     lower_len = 0;
                 }
@@ -455,10 +456,11 @@ void compress_genome(const string& reference_file, const string& target_file, co
                 temp_file << "(" << delta << "," << lower_len << ")";
         }
         temp_file << "\n";
+        cout << "DEBUG: Recorded lowercase indices in temp_file.\n";
                 
         // Record contiguous 'N' characters as delta values (for single characters)
         // or as (delta, length) tuples for runs longer than one.
-        temp_file << "N: ";
+        //temp_file << "N: ";
         int previous_n_start = 0;
         int n_start = -1;
         int n_len = 0;
@@ -473,7 +475,7 @@ void compress_genome(const string& reference_file, const string& target_file, co
                     if (n_len == 1)
                         temp_file << delta << ",";
                     else
-                        temp_file << "(" << delta << "," << n_len << "),";
+                        temp_file << "(" << delta << "," << n_len << ")";
                     previous_n_start = n_start;
                     n_start = -1;
                     n_len = 0;
@@ -488,9 +490,12 @@ void compress_genome(const string& reference_file, const string& target_file, co
                 temp_file << "(" << delta << "," << n_len << ")";
         }
         temp_file << "\n";
+        cout << "DEBUG: Recorded 'N' characters in temp_file.\n";
+        temp_file.close();
 
         // Globalno poravnanje (s duljinom k-mera k).
         vector<Position> positions = match_sequences(reference_genome, target_genome, k, m, true);
+        temp_file.open(temp_file_path, ofstream::out | ofstream::trunc);
 
         // Spremi rezultate u temp_file.
         for (Position pos : positions) {
@@ -508,8 +513,8 @@ void compress_genome(const string& reference_file, const string& target_file, co
     temp_file.close();
 
     // Delta kodiranje rezultata.
-    // delta_encode(temp_file_path);
-    cout << "DEBUG: delta_encode() started.\n";
+    delta_encode(temp_file_path);
+    cout << "DEBUG: delta_encode() finished.\n";
 
     compress_genome_7z(temp_file_path, output_file_path);
     cout << "DEBUG: compress_genome() (reference/target) finished.\n";
